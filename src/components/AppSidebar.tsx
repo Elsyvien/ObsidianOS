@@ -14,7 +14,7 @@ type AppSidebarProps = {
   onSelectCourse: (courseId: string) => void;
 };
 
-const STUDY_VIEWS: AppView[] = ["overview", "notes", "outputs"];
+const STUDY_VIEWS: AppView[] = ["overview", "ai", "notes", "outputs"];
 const CONFIG_VIEWS: AppView[] = ["courses", "settings"];
 
 export function AppSidebar({

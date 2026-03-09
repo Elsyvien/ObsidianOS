@@ -14,11 +14,11 @@ use walkdir::WalkDir;
 use crate::ai::{self, AiProviderSettings, FlashcardCard};
 use crate::markdown::{normalize_key, note_title_candidates, parse_markdown};
 use crate::models::{
-    AiNoteInsight, AiSettings, AiSettingsInput, ConceptMetric, Countdown, CourseConfig,
-    CourseConfigInput, CoverageStats, DashboardData, FlashcardGenerationRequest,
+    AiCourseSummary, AiNoteInsight, AiSettings, AiSettingsInput, ConceptMetric, Countdown,
+    CourseConfig, CourseConfigInput, CoverageStats, DashboardData, FlashcardGenerationRequest,
     FlashcardGenerationResult, FlashcardSummary, FormulaMetric, GraphStats, NoteDetails,
-    NoteSummary, RevisionNoteRequest, RevisionNoteResult, RevisionSummary, ScanReport,
-    ScanStatus, ValidationResult, VaultConfig, WeakNote, WorkspaceSnapshot,
+    NoteSummary, RevisionNoteRequest, RevisionNoteResult, RevisionSummary, ScanReport, ScanStatus,
+    ValidationResult, VaultConfig, WeakNote, WorkspaceSnapshot,
 };
 
 pub struct Database {
@@ -49,6 +49,7 @@ struct StoredNote {
     id: String,
     title: String,
     relative_path: String,
+    content_hash: String,
     links: Vec<String>,
     prerequisites: Vec<String>,
     frontmatter_exam_date: Option<String>,
@@ -106,6 +107,38 @@ struct StoredRevisionRun {
     note_path: String,
     item_count: usize,
     created_at: String,
+}
+
+#[derive(Debug, Clone)]
+struct StoredAiCourseRun {
+    status: String,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    updated_at: Option<String>,
+    model: Option<String>,
+    summary: Option<String>,
+    revision_priorities: Vec<String>,
+    weak_spots: Vec<String>,
+    next_actions: Vec<String>,
+    last_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StoredAiNoteState {
+    note_id: String,
+    status: String,
+    content_hash: String,
+    last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct AiStatusCounts {
+    total_notes: usize,
+    ready_notes: usize,
+    pending_notes: usize,
+    failed_notes: usize,
+    stale_notes: usize,
+    missing_notes: usize,
 }
 
 impl Database {
@@ -252,11 +285,38 @@ impl Database {
               model TEXT NOT NULL,
               FOREIGN KEY (note_id) REFERENCES note_records(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS ai_note_states (
+              note_id TEXT PRIMARY KEY,
+              course_id TEXT NOT NULL,
+              content_hash TEXT NOT NULL,
+              status TEXT NOT NULL,
+              last_error TEXT,
+              updated_at TEXT NOT NULL,
+              generated_at TEXT,
+              model TEXT,
+              FOREIGN KEY (note_id) REFERENCES note_records(id) ON DELETE CASCADE,
+              FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS ai_course_runs (
+              course_id TEXT PRIMARY KEY,
+              status TEXT NOT NULL,
+              started_at TEXT,
+              finished_at TEXT,
+              updated_at TEXT NOT NULL,
+              model TEXT,
+              summary TEXT,
+              revision_priorities_json TEXT NOT NULL DEFAULT '[]',
+              weak_spots_json TEXT NOT NULL DEFAULT '[]',
+              next_actions_json TEXT NOT NULL DEFAULT '[]',
+              last_error TEXT,
+              FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE
+            );
             CREATE INDEX IF NOT EXISTS idx_notes_course ON note_records(course_id);
             CREATE INDEX IF NOT EXISTS idx_concepts_course ON concept_records(course_id);
             CREATE INDEX IF NOT EXISTS idx_formulas_course ON formula_records(course_id);
             CREATE INDEX IF NOT EXISTS idx_edges_course ON dependency_edges(course_id);
             CREATE INDEX IF NOT EXISTS idx_weak_course ON weak_link_suggestions(course_id);
+            CREATE INDEX IF NOT EXISTS idx_ai_note_states_course ON ai_note_states(course_id);
             "#,
         )?;
         Ok(())
@@ -524,6 +584,9 @@ impl Database {
         let weak_rows = self.list_weak_suggestions(&course.id)?;
         let flashcard_sets = self.list_flashcard_sets(&course.id)?;
         let revision_runs = self.list_revision_runs(&course.id)?;
+        let ai_settings = self.get_ai_settings_public()?;
+        let ai_states = self.list_ai_note_states(&course.id)?;
+        let ai_run = self.get_ai_course_run(&course.id)?;
 
         Ok(Some(DashboardData {
             generated_at: now_string(),
@@ -537,7 +600,14 @@ impl Database {
             formulas: build_top_formulas(&formulas),
             flashcards: build_flashcard_summary(&flashcard_sets),
             revision: build_revision_summary(&revision_runs),
-            notes: build_note_summaries(&notes, &edges, &concepts, &formulas),
+            notes: build_note_summaries(&notes, &edges, &concepts, &formulas, &ai_states),
+            ai: build_ai_course_summary(
+                notes.len(),
+                ai_settings.as_ref(),
+                &notes,
+                &ai_states,
+                ai_run.as_ref(),
+            ),
         }))
     }
 
@@ -603,6 +673,7 @@ impl Database {
             }
         }
 
+        let ai_state = self.resolve_note_ai_state(note_id, &note.8)?;
         let ai_insight = self.get_cached_note_ai_insight(note_id, &note.8)?;
 
         Ok(NoteDetails {
@@ -616,6 +687,8 @@ impl Database {
             concepts,
             formulas,
             suggestions,
+            ai_status: ai_state.0,
+            ai_error: ai_state.1,
             ai_insight,
         })
     }
@@ -624,6 +697,7 @@ impl Database {
         let settings = self
             .ai_settings_for_runtime()?
             .ok_or_else(|| anyhow!("enable AI in Setup and save a valid API key first"))?;
+        let course_id = self.note_course_id(note_id)?;
 
         let note = self
             .conn
@@ -662,17 +736,42 @@ impl Database {
             .query_map(params![note_id], |row| row.get::<_, String>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        let payload = ai::generate_note_insight(
-            &settings,
-            &note.1,
-            &note.2,
-            &note.3,
-            &concepts,
-            &formulas,
-            &note.4,
+        self.upsert_ai_note_state(
+            note_id,
+            &course_id,
+            &note.5,
+            "running",
+            None,
+            None,
+            Some(&settings.model),
         )?;
 
+        let payload = ai::generate_note_insight(
+            &settings, &note.1, &note.2, &note.3, &concepts, &formulas, &note.4,
+        )
+        .map_err(|error| {
+            let _ = self.upsert_ai_note_state(
+                note_id,
+                &course_id,
+                &note.5,
+                "failed",
+                Some(&truncate_error(&error.to_string())),
+                None,
+                Some(&settings.model),
+            );
+            error
+        })?;
+
         let generated_at = now_string();
+        self.upsert_ai_note_state(
+            note_id,
+            &course_id,
+            &note.5,
+            "complete",
+            None,
+            Some(&generated_at),
+            Some(&settings.model),
+        )?;
         self.conn.execute(
             r#"
             INSERT INTO ai_note_insights (
@@ -703,6 +802,251 @@ impl Database {
 
         self.get_cached_note_ai_insight(note_id, &note.5)?
             .ok_or_else(|| anyhow!("AI insight was generated but could not be loaded"))
+    }
+
+    pub fn queue_ai_enrichment(&self, course_id: &str, force: bool) -> Result<AiCourseSummary> {
+        self.ai_settings_for_runtime()?
+            .ok_or_else(|| anyhow!("enable AI in Setup and save a valid API key first"))?;
+        let course = self
+            .find_course(course_id)?
+            .ok_or_else(|| anyhow!("course not found"))?;
+        let notes_for_summary = self.list_notes(&course.id)?;
+        let ai_settings = self.get_ai_settings_public()?;
+        let existing_run = self.get_ai_course_run(course_id)?;
+        let existing_states = self.list_ai_note_states(course_id)?;
+
+        if existing_run.as_ref().map(|run| run.status.as_str()) == Some("running") {
+            return Ok(build_ai_course_summary(
+                notes_for_summary.len(),
+                ai_settings.as_ref(),
+                &notes_for_summary,
+                &existing_states,
+                existing_run.as_ref(),
+            ));
+        }
+
+        let notes = self.list_ai_candidate_notes(course_id, force)?;
+        let started_at = now_string();
+
+        for note in &notes {
+            self.upsert_ai_note_state(&note.0, course_id, &note.1, "queued", None, None, None)?;
+        }
+
+        self.conn.execute(
+            r#"
+            INSERT INTO ai_course_runs (
+              course_id, status, started_at, finished_at, updated_at, model, summary,
+              revision_priorities_json, weak_spots_json, next_actions_json, last_error
+            )
+            VALUES (?1, 'running', ?2, NULL, ?2, NULL, NULL, '[]', '[]', '[]', NULL)
+            ON CONFLICT(course_id) DO UPDATE SET
+              status = 'running',
+              started_at = excluded.started_at,
+              finished_at = NULL,
+              updated_at = excluded.updated_at,
+              model = NULL,
+              summary = NULL,
+              revision_priorities_json = '[]',
+              weak_spots_json = '[]',
+              next_actions_json = '[]',
+              last_error = NULL
+            "#,
+            params![course_id, started_at],
+        )?;
+
+        let ai_states = self.list_ai_note_states(course_id)?;
+        let ai_run = self.get_ai_course_run(course_id)?;
+        Ok(build_ai_course_summary(
+            notes_for_summary.len(),
+            ai_settings.as_ref(),
+            &notes_for_summary,
+            &ai_states,
+            ai_run.as_ref(),
+        ))
+    }
+
+    pub fn run_ai_enrichment(&self, course_id: &str, force: bool) -> Result<()> {
+        let settings = self
+            .ai_settings_for_runtime()?
+            .ok_or_else(|| anyhow!("enable AI in Setup and save a valid API key first"))?;
+        let course = self
+            .find_course(course_id)?
+            .ok_or_else(|| anyhow!("course not found"))?;
+        let now = now_string();
+        let notes = self.list_ai_candidate_notes(course_id, force)?;
+        let mut failed_note_count = 0usize;
+
+        for (note_id, content_hash, title, excerpt, headings, links, concepts, formulas) in &notes {
+            self.upsert_ai_note_state(
+                note_id,
+                course_id,
+                content_hash,
+                "running",
+                None,
+                None,
+                Some(&settings.model),
+            )?;
+
+            let result = ai::generate_note_insight(
+                &settings, title, excerpt, headings, concepts, formulas, links,
+            );
+
+            match result {
+                Ok(payload) => {
+                    let generated_at = now_string();
+                    self.conn.execute(
+                        r#"
+                        INSERT INTO ai_note_insights (
+                          note_id, content_hash, summary, takeaways_json, exam_questions_json,
+                          connection_opportunities_json, generated_at, model
+                        )
+                        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                        ON CONFLICT(note_id) DO UPDATE SET
+                          content_hash = excluded.content_hash,
+                          summary = excluded.summary,
+                          takeaways_json = excluded.takeaways_json,
+                          exam_questions_json = excluded.exam_questions_json,
+                          connection_opportunities_json = excluded.connection_opportunities_json,
+                          generated_at = excluded.generated_at,
+                          model = excluded.model
+                        "#,
+                        params![
+                            note_id,
+                            content_hash,
+                            payload.summary,
+                            to_json(&payload.takeaways),
+                            to_json(&payload.exam_questions),
+                            to_json(&payload.connection_opportunities),
+                            generated_at,
+                            settings.model,
+                        ],
+                    )?;
+                    self.upsert_ai_note_state(
+                        note_id,
+                        course_id,
+                        content_hash,
+                        "complete",
+                        None,
+                        Some(&generated_at),
+                        Some(&settings.model),
+                    )?;
+                }
+                Err(error) => {
+                    failed_note_count += 1;
+                    self.upsert_ai_note_state(
+                        note_id,
+                        course_id,
+                        content_hash,
+                        "failed",
+                        Some(&truncate_error(&error.to_string())),
+                        None,
+                        Some(&settings.model),
+                    )?;
+                }
+            }
+        }
+
+        let course_brief = self.generate_course_brief(&course, &settings);
+        let finished_at = now_string();
+
+        match course_brief {
+            Ok(brief) => {
+                let status = if failed_note_count > 0 {
+                    "failed"
+                } else {
+                    "complete"
+                };
+                let last_error = if failed_note_count > 0 {
+                    Some(format!(
+                        "{} note brief{} failed. Open Notes to retry the failed items.",
+                        failed_note_count,
+                        if failed_note_count == 1 { "" } else { "s" }
+                    ))
+                } else {
+                    None
+                };
+                self.conn.execute(
+                    r#"
+                    INSERT INTO ai_course_runs (
+                      course_id, status, started_at, finished_at, updated_at, model, summary,
+                      revision_priorities_json, weak_spots_json, next_actions_json, last_error
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                    ON CONFLICT(course_id) DO UPDATE SET
+                      status = excluded.status,
+                      finished_at = excluded.finished_at,
+                      updated_at = excluded.updated_at,
+                      model = excluded.model,
+                      summary = excluded.summary,
+                      revision_priorities_json = excluded.revision_priorities_json,
+                      weak_spots_json = excluded.weak_spots_json,
+                      next_actions_json = excluded.next_actions_json,
+                      last_error = excluded.last_error
+                    "#,
+                    params![
+                        course_id,
+                        status,
+                        now,
+                        finished_at,
+                        settings.model,
+                        brief.summary,
+                        to_json(&brief.revision_priorities),
+                        to_json(&brief.weak_spots),
+                        to_json(&brief.next_actions),
+                        last_error,
+                    ],
+                )?;
+            }
+            Err(error) => {
+                let message = truncate_error(&error.to_string());
+                self.conn.execute(
+                    r#"
+                    INSERT INTO ai_course_runs (
+                      course_id, status, started_at, finished_at, updated_at, model, summary,
+                      revision_priorities_json, weak_spots_json, next_actions_json, last_error
+                    )
+                    VALUES (?1, 'failed', ?2, ?3, ?3, ?4, NULL, '[]', '[]', '[]', ?5)
+                    ON CONFLICT(course_id) DO UPDATE SET
+                      status = 'failed',
+                      finished_at = excluded.finished_at,
+                      updated_at = excluded.updated_at,
+                      model = excluded.model,
+                      summary = NULL,
+                      revision_priorities_json = '[]',
+                      weak_spots_json = '[]',
+                      next_actions_json = '[]',
+                      last_error = excluded.last_error
+                    "#,
+                    params![course_id, now, finished_at, settings.model, message],
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn mark_ai_enrichment_failed(&self, course_id: &str, message: &str) -> Result<()> {
+        let timestamp = now_string();
+        self.conn.execute(
+            r#"
+            INSERT INTO ai_course_runs (
+              course_id, status, started_at, finished_at, updated_at, model, summary,
+              revision_priorities_json, weak_spots_json, next_actions_json, last_error
+            )
+            VALUES (?1, 'failed', ?2, ?2, ?2, NULL, NULL, '[]', '[]', '[]', ?3)
+            ON CONFLICT(course_id) DO UPDATE SET
+              status = 'failed',
+              finished_at = excluded.finished_at,
+              updated_at = excluded.updated_at,
+              summary = NULL,
+              revision_priorities_json = '[]',
+              weak_spots_json = '[]',
+              next_actions_json = '[]',
+              last_error = excluded.last_error
+            "#,
+            params![course_id, timestamp, truncate_error(message)],
+        )?;
+        Ok(())
     }
 }
 
@@ -1083,6 +1427,265 @@ impl Database {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    fn resolve_note_ai_state(
+        &self,
+        note_id: &str,
+        content_hash: &str,
+    ) -> Result<(String, Option<String>)> {
+        let state = self
+            .conn
+            .query_row(
+                r#"
+                SELECT status, content_hash, last_error
+                FROM ai_note_states
+                WHERE note_id = ?1
+                "#,
+                params![note_id],
+                |row| {
+                    Ok(StoredAiNoteState {
+                        note_id: note_id.to_string(),
+                        status: row.get(0)?,
+                        content_hash: row.get(1)?,
+                        last_error: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?;
+
+        Ok(match state {
+            None => ("missing".to_string(), None),
+            Some(state) if state.content_hash != content_hash => ("stale".to_string(), None),
+            Some(state) => (state.status, state.last_error),
+        })
+    }
+
+    fn list_ai_note_states(&self, course_id: &str) -> Result<HashMap<String, StoredAiNoteState>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT note_id, status, content_hash, last_error, updated_at
+            FROM ai_note_states
+            WHERE course_id = ?1
+            "#,
+        )?;
+        let rows = statement
+            .query_map(params![course_id], |row| {
+                Ok(StoredAiNoteState {
+                    note_id: row.get(0)?,
+                    status: row.get(1)?,
+                    content_hash: row.get(2)?,
+                    last_error: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        Ok(rows
+            .into_iter()
+            .map(|state| (state.note_id.clone(), state))
+            .collect())
+    }
+
+    fn get_ai_course_run(&self, course_id: &str) -> Result<Option<StoredAiCourseRun>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT status, started_at, finished_at, updated_at, model, summary,
+                       revision_priorities_json, weak_spots_json, next_actions_json, last_error
+                FROM ai_course_runs
+                WHERE course_id = ?1
+                "#,
+                params![course_id],
+                |row| {
+                    Ok(StoredAiCourseRun {
+                        status: row.get(0)?,
+                        started_at: row.get(1)?,
+                        finished_at: row.get(2)?,
+                        updated_at: row.get(3)?,
+                        model: row.get(4)?,
+                        summary: row.get(5)?,
+                        revision_priorities: from_json_vec::<String>(&row.get::<_, String>(6)?),
+                        weak_spots: from_json_vec::<String>(&row.get::<_, String>(7)?),
+                        next_actions: from_json_vec::<String>(&row.get::<_, String>(8)?),
+                        last_error: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn note_course_id(&self, note_id: &str) -> Result<String> {
+        self.conn
+            .query_row(
+                "SELECT course_id FROM note_records WHERE id = ?1",
+                params![note_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| anyhow!("note not found"))
+    }
+
+    fn upsert_ai_note_state(
+        &self,
+        note_id: &str,
+        course_id: &str,
+        content_hash: &str,
+        status: &str,
+        last_error: Option<&str>,
+        generated_at: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO ai_note_states (
+              note_id, course_id, content_hash, status, last_error, updated_at, generated_at, model
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(note_id) DO UPDATE SET
+              course_id = excluded.course_id,
+              content_hash = excluded.content_hash,
+              status = excluded.status,
+              last_error = excluded.last_error,
+              updated_at = excluded.updated_at,
+              generated_at = excluded.generated_at,
+              model = excluded.model
+            "#,
+            params![
+                note_id,
+                course_id,
+                content_hash,
+                status,
+                last_error,
+                now_string(),
+                generated_at,
+                model,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn list_ai_candidate_notes(
+        &self,
+        course_id: &str,
+        force: bool,
+    ) -> Result<
+        Vec<(
+            String,
+            String,
+            String,
+            String,
+            Vec<String>,
+            Vec<String>,
+            Vec<String>,
+            Vec<String>,
+        )>,
+    > {
+        let ai_states = self.list_ai_note_states(course_id)?;
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id, content_hash, title, excerpt, headings_json, links_json
+            FROM note_records
+            WHERE course_id = ?1
+            ORDER BY title ASC
+            "#,
+        )?;
+
+        let notes = statement
+            .query_map(params![course_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    from_json_vec::<String>(&row.get::<_, String>(4)?),
+                    from_json_vec::<String>(&row.get::<_, String>(5)?),
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut candidates = Vec::new();
+        for (note_id, content_hash, title, excerpt, headings, links) in notes {
+            let should_process = force
+                || match ai_states.get(&note_id) {
+                    None => true,
+                    Some(state) if state.content_hash != content_hash => true,
+                    Some(state) if state.status == "failed" => true,
+                    Some(state) if state.status == "queued" || state.status == "running" => true,
+                    Some(state) => state.status != "complete",
+                };
+
+            if !should_process {
+                continue;
+            }
+
+            let concepts = self
+                .conn
+                .prepare(
+                    "SELECT name FROM concept_records WHERE note_id = ?1 ORDER BY support_score DESC, name ASC",
+                )?
+                .query_map(params![&note_id], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let formulas = self
+                .conn
+                .prepare("SELECT latex FROM formula_records WHERE note_id = ?1 ORDER BY latex ASC")?
+                .query_map(params![&note_id], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+
+            candidates.push((
+                note_id,
+                content_hash,
+                title,
+                excerpt,
+                headings,
+                links,
+                concepts,
+                formulas,
+            ));
+        }
+
+        Ok(candidates)
+    }
+
+    fn generate_course_brief(
+        &self,
+        course: &StoredCourse,
+        settings: &AiProviderSettings,
+    ) -> Result<ai::AiCourseBriefPayload> {
+        let notes = self.list_notes(&course.id)?;
+        let weak_rows = self.list_weak_suggestions(&course.id)?;
+        let concepts = self.list_concepts(&course.id)?;
+        let mut note_payload = Vec::new();
+
+        for note in notes.iter().take(24) {
+            if let Some(insight) = self.get_cached_note_ai_insight(&note.id, &note.content_hash)? {
+                note_payload.push(format!(
+                    "Title: {}\nSummary: {}\nTakeaways: {}\nQuestions: {}",
+                    note.title,
+                    insight.summary,
+                    insight.takeaways.join(" | "),
+                    insight.exam_questions.join(" | ")
+                ));
+            }
+        }
+
+        if note_payload.is_empty() {
+            bail!("AI note insights are not ready yet");
+        }
+
+        ai::generate_course_brief(
+            settings,
+            &course.name,
+            &build_top_concepts(&concepts)
+                .into_iter()
+                .map(|concept| concept.name)
+                .collect::<Vec<_>>(),
+            &build_weak_notes(&notes, &weak_rows)
+                .into_iter()
+                .map(|note| note.title)
+                .collect::<Vec<_>>(),
+            &note_payload.join("\n---\n"),
+        )
     }
 
     fn list_courses(&self) -> Result<Vec<StoredCourse>> {
@@ -1540,7 +2143,7 @@ impl Database {
     fn list_notes(&self, course_id: &str) -> Result<Vec<StoredNote>> {
         let mut statement = self.conn.prepare(
             r#"
-            SELECT id, title, relative_path, links_json, prerequisites_json, frontmatter_exam_date
+            SELECT id, title, relative_path, content_hash, links_json, prerequisites_json, frontmatter_exam_date
             FROM note_records
             WHERE course_id = ?1
             ORDER BY title ASC
@@ -1552,9 +2155,10 @@ impl Database {
                     id: row.get(0)?,
                     title: row.get(1)?,
                     relative_path: row.get(2)?,
-                    links: from_json_vec::<String>(&row.get::<_, String>(3)?),
-                    prerequisites: from_json_vec::<String>(&row.get::<_, String>(4)?),
-                    frontmatter_exam_date: row.get(5)?,
+                    content_hash: row.get(3)?,
+                    links: from_json_vec::<String>(&row.get::<_, String>(4)?),
+                    prerequisites: from_json_vec::<String>(&row.get::<_, String>(5)?),
+                    frontmatter_exam_date: row.get(6)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1919,6 +2523,7 @@ fn build_note_summaries(
     edges: &[StoredEdge],
     concepts: &[(String, String, String, f64)],
     formulas: &[(String, String, String)],
+    ai_states: &HashMap<String, StoredAiNoteState>,
 ) -> Vec<NoteSummary> {
     let mut incident = HashMap::<String, usize>::new();
     for edge in edges {
@@ -1952,6 +2557,7 @@ fn build_note_summaries(
                 concept_count: concept_total,
                 formula_count: formula_total,
                 strength: (strength * 100.0).round() / 100.0,
+                ai_status: current_ai_status(note, ai_states),
             }
         })
         .collect::<Vec<_>>();
@@ -1963,6 +2569,105 @@ fn build_note_summaries(
             .then_with(|| left.title.cmp(&right.title))
     });
     summaries
+}
+
+fn current_ai_status(note: &StoredNote, ai_states: &HashMap<String, StoredAiNoteState>) -> String {
+    match ai_states.get(&note.id) {
+        None => "missing".to_string(),
+        Some(state) if state.content_hash != note.content_hash => "stale".to_string(),
+        Some(state) => state.status.clone(),
+    }
+}
+
+fn build_ai_course_summary(
+    total_notes: usize,
+    ai_settings: Option<&AiSettings>,
+    notes: &[StoredNote],
+    ai_states: &HashMap<String, StoredAiNoteState>,
+    ai_run: Option<&StoredAiCourseRun>,
+) -> AiCourseSummary {
+    let counts = compute_ai_status_counts(notes, ai_states);
+    let default_status = if let Some(settings) = ai_settings {
+        if settings.enabled && settings.has_api_key {
+            if counts.pending_notes > 0 {
+                "running"
+            } else if counts.ready_notes == counts.total_notes && counts.total_notes > 0 {
+                "complete"
+            } else if counts.failed_notes > 0 && counts.ready_notes == 0 {
+                "failed"
+            } else if counts.ready_notes > 0 {
+                "partial"
+            } else {
+                "idle"
+            }
+        } else {
+            "disabled"
+        }
+    } else {
+        "disabled"
+    };
+    let status = match ai_run.map(|run| run.status.as_str()) {
+        Some("running") => "running".to_string(),
+        Some("failed") if counts.ready_notes == 0 => "failed".to_string(),
+        _ => default_status.to_string(),
+    };
+
+    AiCourseSummary {
+        status,
+        total_notes: total_notes.max(counts.total_notes),
+        ready_notes: counts.ready_notes,
+        pending_notes: counts.pending_notes,
+        failed_notes: counts.failed_notes,
+        stale_notes: counts.stale_notes,
+        missing_notes: counts.missing_notes,
+        started_at: ai_run.and_then(|run| run.started_at.clone()),
+        finished_at: ai_run.and_then(|run| run.finished_at.clone()),
+        updated_at: ai_run.and_then(|run| run.updated_at.clone()),
+        model: ai_run.and_then(|run| run.model.clone()),
+        summary: ai_run.and_then(|run| run.summary.clone()),
+        revision_priorities: ai_run
+            .map(|run| run.revision_priorities.clone())
+            .unwrap_or_default(),
+        weak_spots: ai_run.map(|run| run.weak_spots.clone()).unwrap_or_default(),
+        next_actions: ai_run
+            .map(|run| run.next_actions.clone())
+            .unwrap_or_default(),
+        last_error: ai_run.and_then(|run| run.last_error.clone()),
+    }
+}
+
+fn compute_ai_status_counts(
+    notes: &[StoredNote],
+    ai_states: &HashMap<String, StoredAiNoteState>,
+) -> AiStatusCounts {
+    let mut counts = AiStatusCounts {
+        total_notes: notes.len(),
+        ..AiStatusCounts::default()
+    };
+
+    for note in notes {
+        match current_ai_status(note, ai_states).as_str() {
+            "complete" => counts.ready_notes += 1,
+            "queued" | "running" => counts.pending_notes += 1,
+            "failed" => counts.failed_notes += 1,
+            "stale" => {
+                counts.stale_notes += 1;
+                counts.pending_notes += 1;
+            }
+            _ => counts.missing_notes += 1,
+        }
+    }
+
+    counts
+}
+
+fn truncate_error(message: &str) -> String {
+    let limit = 320usize;
+    if message.chars().count() <= limit {
+        return message.to_string();
+    }
+
+    message.chars().take(limit).collect::<String>()
 }
 
 fn group_concepts_by_key(

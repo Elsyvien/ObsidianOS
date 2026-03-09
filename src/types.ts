@@ -82,6 +82,7 @@ export type NoteSummary = {
   conceptCount: number;
   formulaCount: number;
   strength: number;
+  aiStatus: string;
 };
 
 export type AiNoteInsight = {
@@ -105,7 +106,28 @@ export type NoteDetails = {
   concepts: string[];
   formulas: string[];
   suggestions: string[];
+  aiStatus: string;
+  aiError: string | null;
   aiInsight: AiNoteInsight | null;
+};
+
+export type AiCourseSummary = {
+  status: string;
+  totalNotes: number;
+  readyNotes: number;
+  pendingNotes: number;
+  failedNotes: number;
+  staleNotes: number;
+  missingNotes: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string | null;
+  model: string | null;
+  summary: string | null;
+  revisionPriorities: string[];
+  weakSpots: string[];
+  nextActions: string[];
+  lastError: string | null;
 };
 
 export type ScanStatus = {
@@ -177,6 +199,7 @@ export type DashboardData = {
   flashcards: FlashcardSummary;
   revision: RevisionSummary;
   notes: NoteSummary[];
+  ai: AiCourseSummary;
 };
 
 export type WorkspaceSnapshot = {

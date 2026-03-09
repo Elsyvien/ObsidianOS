@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
+  AiCourseSummary,
   AiNoteInsight,
   AiSettingsInput,
   CourseConfigInput,
@@ -26,6 +27,7 @@ import {
   runScanMock,
   saveAiSettingsMock,
   saveCourseConfigMock,
+  startAiEnrichmentMock,
   validateAiSettingsMock,
 } from "./mockApi";
 
@@ -96,6 +98,11 @@ export function getNoteDetails(noteId: string) {
 export function generateNoteAiInsight(noteId: string) {
   if (!isTauriRuntime()) return generateNoteAiInsightMock(noteId);
   return invoke<AiNoteInsight>("generate_note_ai_insight", { noteId });
+}
+
+export function startAiEnrichment(courseId: string, force = false) {
+  if (!isTauriRuntime()) return startAiEnrichmentMock(courseId, force);
+  return invoke<AiCourseSummary>("start_ai_enrichment", { courseId, force });
 }
 
 export function saveAiSettings(input: AiSettingsInput) {

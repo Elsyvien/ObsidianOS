@@ -1,27 +1,31 @@
 import { formatDateTime } from "../lib";
-import type { CourseConfig, DashboardData, ScanStatus } from "../types";
+import type { AiCourseSummary, CourseConfig, DashboardData, ScanStatus } from "../types";
 import type { AppView } from "./appShell";
 
 type TopbarProps = {
   activeView: AppView;
+  aiStatus: AiCourseSummary | null;
   busyAction: string | null;
   dashboard: DashboardData | null;
   runtimeMode: "tauri" | "browser-preview";
   scanStatus: ScanStatus | null;
   selectedCourse: CourseConfig | null;
   title: string;
+  onRunAi: () => void;
   onRefresh: () => void;
   onScan: () => void;
 };
 
 export function Topbar({
   activeView,
+  aiStatus,
   busyAction,
   dashboard,
   runtimeMode,
   scanStatus,
   selectedCourse,
   title,
+  onRunAi,
   onRefresh,
   onScan,
 }: TopbarProps) {
@@ -30,6 +34,10 @@ export function Topbar({
   const headline =
     activeView === "overview"
       ? selectedCourse?.name ?? "Exam workspace"
+      : activeView === "ai"
+        ? selectedCourse
+          ? `${selectedCourse.name} AI workspace`
+          : "AI workspace"
       : activeView === "notes"
         ? selectedCourse
           ? `${selectedCourse.name} notes`
@@ -38,8 +46,11 @@ export function Topbar({
   const statusLine = [
     isPreview ? "Preview" : "Desktop",
     selectedCourse ? dashboard?.countdown.label ?? "Course selected" : "No course selected",
+    activeView === "ai" && aiStatus ? `AI ${aiStatus.status}` : null,
     scanStatus?.lastScanAt ? `Last scan ${formatDateTime(scanStatus.lastScanAt)}` : "No scan yet",
-  ].join("   ·   ");
+  ]
+    .filter(Boolean)
+    .join("   ·   ");
 
   return (
     <header className="topbar">
@@ -54,6 +65,16 @@ export function Topbar({
 
       <div className="topbar__meta">
         <div className="topbar__actions">
+          {activeView === "ai" ? (
+            <button
+              className="button button--subtle"
+              disabled={!selectedCourse || busyAction !== null || aiStatus?.status === "running"}
+              onClick={onRunAi}
+              type="button"
+            >
+              {aiStatus?.status === "running" ? "AI running..." : "Run AI"}
+            </button>
+          ) : null}
           <button className="button button--subtle" disabled={!canScan || busyAction !== null} onClick={onScan} type="button">
             {busyAction === "Scan failed" ? "Scanning..." : "Scan course"}
           </button>

@@ -33,6 +33,7 @@ type InspectorPaneProps = {
   onConnectVault: () => void;
   onDeleteCourse: (courseId: string) => void;
   onDisconnectVault: () => void;
+  onGenerateCourseAi: () => void;
   onGenerateNoteAiInsight: () => void;
   onResetCourseDraft: () => void;
   onSaveAiSettings: () => void;
@@ -63,6 +64,7 @@ export function InspectorPane({
   onConnectVault,
   onDeleteCourse,
   onDisconnectVault,
+  onGenerateCourseAi,
   onGenerateNoteAiInsight,
   onResetCourseDraft,
   onSaveAiSettings,
@@ -111,6 +113,62 @@ export function InspectorPane({
               </dl>
             ) : (
               <p className="inspector-copy">Run the first scan to populate the index, graph links, and weak-note suggestions.</p>
+            )}
+          </InspectorSection>
+        </>
+      ) : null}
+
+      {activeView === "ai" ? (
+        <>
+          <InspectorSection eyebrow="AI status" title={selectedCourse?.name ?? "No course selected"}>
+            {selectedCourse && workspace.dashboard ? (
+              <dl className="inspector-grid">
+                <InspectorItem label="Status" value={workspace.dashboard.ai.status} />
+                <InspectorItem label="Ready" value={`${workspace.dashboard.ai.readyNotes}/${workspace.dashboard.ai.totalNotes}`} />
+                <InspectorItem label="Pending" value={String(workspace.dashboard.ai.pendingNotes)} />
+                <InspectorItem label="Model" value={workspace.dashboard.ai.model ?? workspace.aiSettings?.model ?? "Not set"} />
+              </dl>
+            ) : (
+              <p className="inspector-copy">Choose a course to inspect its AI enrichment state.</p>
+            )}
+            <div className="button-row">
+              <button
+                className="button button--subtle"
+                disabled={!selectedCourse || busyAction !== null || workspace.dashboard?.ai.status === "running"}
+                onClick={onGenerateCourseAi}
+                type="button"
+              >
+                {workspace.dashboard?.ai.status === "running" ? "Running..." : "Run AI"}
+              </button>
+            </div>
+          </InspectorSection>
+
+          <InspectorSection eyebrow="Latest brief" title="Course summary">
+            {workspace.dashboard?.ai.summary ? (
+              <>
+                <p className="inspector-copy">{workspace.dashboard.ai.summary}</p>
+                {workspace.dashboard.ai.lastError ? (
+                  <p className="inspector-copy">{workspace.dashboard.ai.lastError}</p>
+                ) : null}
+              </>
+            ) : (
+              <p className="inspector-copy">
+                The course summary appears here after AI builds enough note briefs to synthesize the course.
+              </p>
+            )}
+          </InspectorSection>
+
+          <InspectorSection eyebrow="Selected note" title={noteDetails?.title ?? "Choose a note"}>
+            {noteDetails ? (
+              <>
+                <dl className="inspector-grid">
+                  <InspectorItem label="AI state" value={noteDetails.aiStatus} />
+                  <InspectorItem label="Path" value={shortenPath(noteDetails.relativePath)} />
+                </dl>
+                {noteDetails.aiError ? <p className="inspector-copy">{noteDetails.aiError}</p> : null}
+              </>
+            ) : (
+              <p className="inspector-copy">Select a note from the AI queue to review its current status and brief.</p>
             )}
           </InspectorSection>
         </>
@@ -230,6 +288,10 @@ export function InspectorPane({
               <InspectorSection eyebrow="AI study coach" title="Exam brief">
                 {workspace.aiSettings?.enabled && hasSavedApiKey ? (
                   <>
+                    <dl className="inspector-grid inspector-grid--single">
+                      <InspectorItem label="Status" value={noteDetails.aiStatus} />
+                    </dl>
+                    {noteDetails.aiError ? <p className="inspector-copy">{noteDetails.aiError}</p> : null}
                     <div className="button-row">
                       <button
                         className="button button--subtle"

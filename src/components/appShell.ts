@@ -1,4 +1,4 @@
-export type AppView = "overview" | "courses" | "notes" | "outputs" | "settings";
+export type AppView = "overview" | "ai" | "courses" | "notes" | "outputs" | "settings";
 
 export type NoteFilter = "all" | "weak" | "selected";
 
@@ -11,6 +11,11 @@ export const APP_VIEWS: Array<{
     id: "overview",
     label: "Overview",
     description: "Track the active course, countdown, graph health, and the next revision moves.",
+  },
+  {
+    id: "ai",
+    label: "AI",
+    description: "Run AI enrichment, review the course brief, and track which notes still need support.",
   },
   {
     id: "courses",

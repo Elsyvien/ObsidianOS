@@ -1,4 +1,5 @@
 import type {
+  AiCourseSummary,
   AiNoteInsight,
   AiSettingsInput,
   CourseConfig,
@@ -218,12 +219,52 @@ export async function generateNoteAiInsightMock(noteId: string) {
       model: "preview-demo",
     };
 
+    note.aiStatus = "complete";
+    note.aiError = null;
     note.aiInsight = insight;
     state.workspace.dashboard = buildDashboard(courseId);
     return clone(insight);
   }
 
   throw new Error("Note not found.");
+}
+
+export async function startAiEnrichmentMock(courseId: string, force = false) {
+  ensureDemoWorkspace();
+  const notes = state.notesByCourse[courseId];
+  if (!notes) {
+    throw new Error("Course not found.");
+  }
+
+  state.notesByCourse[courseId] = notes.map((note) => {
+    if (!force && note.aiInsight) {
+      return { ...note, aiStatus: "complete", aiError: null };
+    }
+
+    return {
+      ...note,
+      aiStatus: "complete",
+      aiError: null,
+      aiInsight: {
+        noteId: note.id,
+        summary: `${note.title} is ready for revision. Focus on the definition, the standard exercise pattern, and the link to the next chapter.`,
+        takeaways: note.concepts
+          .slice(0, 3)
+          .map((concept) => `Own ${concept} well enough to explain it from memory.`),
+        examQuestions: [
+          `State the core result in ${note.title}.`,
+          `Show a standard application of ${note.title}.`,
+          `Explain how ${note.title} connects to ${note.links[0] ?? "the next related note"}.`,
+        ],
+        connectionOpportunities: note.suggestions.slice(0, 3),
+        generatedAt: now(),
+        model: "preview-demo",
+      },
+    };
+  });
+
+  state.workspace.dashboard = buildDashboard(courseId);
+  return clone(state.workspace.dashboard!.ai);
 }
 
 export async function saveAiSettingsMock(input: AiSettingsInput) {
@@ -297,6 +338,7 @@ function buildDashboard(courseId: string): DashboardData {
     conceptCount: note.concepts.length,
     formulaCount: note.formulas.length,
     strength: Number((3.6 - index * 0.4).toFixed(1)),
+    aiStatus: note.aiStatus,
   }));
 
   return {
@@ -317,6 +359,7 @@ function buildDashboard(courseId: string): DashboardData {
       ...blueprint.graph,
       noteCount: notes.length,
     },
+    ai: buildAiSummary(notes),
     weakNotes: notes.slice(-2).map((note, index) => ({
       noteId: note.id,
       title: note.title,
@@ -338,6 +381,55 @@ function buildDashboard(courseId: string): DashboardData {
       itemCount: revision?.itemCount ?? 0,
     },
     notes: noteSummaries,
+  };
+}
+
+function buildAiSummary(notes: NoteDetails[]): AiCourseSummary {
+  const readyNotes = notes.filter((note) => note.aiStatus === "complete").length;
+  const failedNotes = notes.filter((note) => note.aiStatus === "failed").length;
+  const staleNotes = notes.filter((note) => note.aiStatus === "stale").length;
+  const pendingNotes = notes.filter((note) => note.aiStatus === "queued" || note.aiStatus === "running").length;
+  const missingNotes = notes.filter((note) => note.aiStatus === "missing").length;
+  const status =
+    pendingNotes > 0
+      ? "running"
+      : readyNotes === notes.length && notes.length > 0
+        ? "complete"
+        : failedNotes > 0
+          ? "failed"
+          : readyNotes > 0
+            ? "partial"
+            : "idle";
+
+  return {
+    status,
+    totalNotes: notes.length,
+    readyNotes,
+    pendingNotes,
+    failedNotes,
+    staleNotes,
+    missingNotes,
+    startedAt: readyNotes ? now() : null,
+    finishedAt: status === "complete" ? now() : null,
+    updatedAt: now(),
+    model: readyNotes ? "preview-demo" : null,
+    summary:
+      readyNotes > 0
+        ? "Preview AI grouped the course into a few clean revision tracks and highlighted where to deepen recall."
+        : null,
+    revisionPriorities:
+      readyNotes > 0
+        ? ["Rehearse the definitions first", "Work one proof-heavy note", "Turn the strongest notes into flashcards"]
+        : [],
+    weakSpots:
+      readyNotes > 0
+        ? ["Examples need backlinks to theory", "Sparse notes need one stronger anchor note"]
+        : [],
+    nextActions:
+      readyNotes > 0
+        ? ["Refresh stale notes after the next scan", "Review failed notes before generating outputs"]
+        : [],
+    lastError: null,
   };
 }
 
@@ -446,6 +538,8 @@ function buildBlueprint(course: CourseConfig): DemoBlueprint {
           concepts: ["Grenzwerte", "Stetigkeit", "Rechenregeln"],
           formulas: ["lim_{x \\to a} f(x) = L"],
           suggestions: ["Link examples back to Folgen", "Add a bridge note to Stetigkeit"],
+          aiStatus: "missing",
+          aiError: null,
           aiInsight: null,
         },
         {
@@ -459,6 +553,8 @@ function buildBlueprint(course: CourseConfig): DemoBlueprint {
           concepts: ["Folgen", "Konvergenz", "Monotonie"],
           formulas: ["a_n \\to a"],
           suggestions: ["Reference Grenzwerte examples", "Link monotonic sequences to continuity notes"],
+          aiStatus: "missing",
+          aiError: null,
           aiInsight: null,
         },
         {
@@ -472,6 +568,8 @@ function buildBlueprint(course: CourseConfig): DemoBlueprint {
           concepts: ["Ableitung", "Differenzenquotient", "Kurvendiskussion"],
           formulas: ["f'(x) = lim_{h \\to 0} (f(x+h)-f(x))/h"],
           suggestions: ["Connect derivative rules to Grenzwerte", "Add backlinks from worked examples"],
+          aiStatus: "missing",
+          aiError: null,
           aiInsight: null,
         },
       ],
@@ -513,6 +611,8 @@ function buildBlueprint(course: CourseConfig): DemoBlueprint {
           concepts: ["Binaere Darstellung", "Hexadezimal", "Umrechnung"],
           formulas: ["x = \\sum_{i=0}^{n} b_i 2^i"],
           suggestions: ["Link conversion exercises to Codierung", "Add backlinks from chapter overview"],
+          aiStatus: "missing",
+          aiError: null,
           aiInsight: null,
         },
         {
@@ -526,6 +626,8 @@ function buildBlueprint(course: CourseConfig): DemoBlueprint {
           concepts: ["Aussagenlogik", "Implikation", "Aequivalenz"],
           formulas: ["p \\to q \\equiv \\neg p \\lor q"],
           suggestions: ["Connect implication rules to truth table exercises"],
+          aiStatus: "missing",
+          aiError: null,
           aiInsight: null,
         },
         {
@@ -539,6 +641,8 @@ function buildBlueprint(course: CourseConfig): DemoBlueprint {
           concepts: ["Codierung", "ASCII", "Fehlererkennung"],
           formulas: ["H(X) = -\\sum p(x) log_2 p(x)"],
           suggestions: ["Link codierung examples to Zahlensysteme", "Add a summary link from chapter index"],
+          aiStatus: "missing",
+          aiError: null,
           aiInsight: null,
         },
       ],
@@ -579,6 +683,8 @@ function buildBlueprint(course: CourseConfig): DemoBlueprint {
         concepts: ["Zustandsraum", "Notation", "Annahmen"],
         formulas: ["x' = Ax + Bu"],
         suggestions: ["Link notation examples to Stabilitaet", "Add a backlink from summary note"],
+        aiStatus: "missing",
+        aiError: null,
         aiInsight: null,
       },
       {
@@ -592,6 +698,8 @@ function buildBlueprint(course: CourseConfig): DemoBlueprint {
         concepts: ["Stabilitaet", "Eigenwerte", "Lyapunov"],
         formulas: ["\\lambda(A) < 0"],
         suggestions: ["Connect this note to worked examples"],
+        aiStatus: "missing",
+        aiError: null,
         aiInsight: null,
       },
       {
@@ -605,6 +713,8 @@ function buildBlueprint(course: CourseConfig): DemoBlueprint {
         concepts: ["Uebertragungsfunktion", "Laplace-Transformation"],
         formulas: ["G(s) = C(sI - A)^{-1}B + D"],
         suggestions: ["Link this note to Zustandsraum", "Reference Stabilitaet from worked examples"],
+        aiStatus: "missing",
+        aiError: null,
         aiInsight: null,
       },
     ],

@@ -132,6 +132,7 @@ pub struct NoteSummary {
     pub concept_count: usize,
     pub formula_count: usize,
     pub strength: f64,
+    pub ai_status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +150,7 @@ pub struct DashboardData {
     pub flashcards: FlashcardSummary,
     pub revision: RevisionSummary,
     pub notes: Vec<NoteSummary>,
+    pub ai: AiCourseSummary,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +166,8 @@ pub struct NoteDetails {
     pub concepts: Vec<String>,
     pub formulas: Vec<String>,
     pub suggestions: Vec<String>,
+    pub ai_status: String,
+    pub ai_error: Option<String>,
     pub ai_insight: Option<AiNoteInsight>,
 }
 
@@ -177,6 +181,27 @@ pub struct AiNoteInsight {
     pub connection_opportunities: Vec<String>,
     pub generated_at: String,
     pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCourseSummary {
+    pub status: String,
+    pub total_notes: usize,
+    pub ready_notes: usize,
+    pub pending_notes: usize,
+    pub failed_notes: usize,
+    pub stale_notes: usize,
+    pub missing_notes: usize,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub model: Option<String>,
+    pub summary: Option<String>,
+    pub revision_priorities: Vec<String>,
+    pub weak_spots: Vec<String>,
+    pub next_actions: Vec<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

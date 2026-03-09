@@ -9,8 +9,11 @@ import type {
 } from "../types";
 import type { AppView, NoteFilter } from "./appShell";
 
+type AiFilter = "all" | "ready" | "needs-work" | "failed";
+
 type MainPaneProps = {
   activeView: AppView;
+  aiFilter: AiFilter;
   busyAction: string | null;
   flashcardResult: FlashcardGenerationResult | null;
   noteFilter: NoteFilter;
@@ -21,10 +24,13 @@ type MainPaneProps = {
   selectedNoteId: string | null;
   selectedNoteIds: string[];
   workspace: WorkspaceSnapshot;
+  onChangeAiFilter: (filter: AiFilter) => void;
   onChangeNoteFilter: (filter: NoteFilter) => void;
   onCreateRevisionNote: () => void;
+  onGenerateCourseAi: () => void;
   onGenerateFlashcards: () => void;
   onOpenNote: (noteId: string) => void;
+  onRefreshCourseAi: () => void;
   onSelectCourse: (courseId: string) => void;
   onStartNewCourse: () => void;
   onToggleNoteSelection: (noteId: string) => void;
@@ -32,6 +38,7 @@ type MainPaneProps = {
 
 export function MainPane({
   activeView,
+  aiFilter,
   busyAction,
   flashcardResult,
   noteFilter,
@@ -42,10 +49,13 @@ export function MainPane({
   selectedNoteId,
   selectedNoteIds,
   workspace,
+  onChangeAiFilter,
   onChangeNoteFilter,
   onCreateRevisionNote,
+  onGenerateCourseAi,
   onGenerateFlashcards,
   onOpenNote,
+  onRefreshCourseAi,
   onSelectCourse,
   onStartNewCourse,
   onToggleNoteSelection,
@@ -58,6 +68,15 @@ export function MainPane({
     dashboard?.notes.filter((note) => {
       if (noteFilter === "weak") return weakNoteIds.has(note.id);
       if (noteFilter === "selected") return selectedNoteIds.includes(note.id);
+      return true;
+    }) ?? [];
+  const aiNotes =
+    dashboard?.notes.filter((note) => {
+      if (aiFilter === "ready") return note.aiStatus === "complete";
+      if (aiFilter === "failed") return note.aiStatus === "failed";
+      if (aiFilter === "needs-work") {
+        return note.aiStatus === "missing" || note.aiStatus === "stale" || note.aiStatus === "queued" || note.aiStatus === "running";
+      }
       return true;
     }) ?? [];
   const selectedQueue = dashboard?.notes.filter((note) => selectedNoteIds.includes(note.id)) ?? [];
@@ -236,6 +255,11 @@ export function MainPane({
                     <div className="row-item__title-row">
                       <span className="row-item__title">{note.title}</span>
                       {weakNoteIds.has(note.id) ? <span className="soft-badge soft-badge--warning">Weak</span> : null}
+                      {workspace.aiSettings?.enabled ? (
+                        <span className={`soft-badge soft-badge--${aiStatusTone(note.aiStatus)}`}>
+                          {aiStatusLabel(note.aiStatus)}
+                        </span>
+                      ) : null}
                     </div>
                     <span className="row-item__subtitle">{note.relativePath}</span>
                   </button>
@@ -288,6 +312,156 @@ export function MainPane({
             <EmptyState
               title="No notes queued"
               description="Queue notes from the library above to build the flashcard set."
+            />
+          )}
+        </section>
+      </div>
+    );
+  }
+
+  if (activeView === "ai") {
+    return (
+      <div className="page-stack">
+        {scanNotice}
+        <section className="surface surface--hero">
+          <div className="surface__header">
+            <div>
+              <span className="surface__eyebrow">AI workspace</span>
+              <h3>{selectedCourse ? `${selectedCourse.name} study copilot` : "Choose a course"}</h3>
+            </div>
+            <div className="toolbar">
+              {[
+                { id: "all", label: "All notes" },
+                { id: "needs-work", label: "Needs work" },
+                { id: "ready", label: "Ready" },
+                { id: "failed", label: "Failed" },
+              ].map((filter) => (
+                <button
+                  key={filter.id}
+                  className={`toolbar__item ${aiFilter === filter.id ? "toolbar__item--active" : ""}`}
+                  onClick={() => onChangeAiFilter(filter.id as AiFilter)}
+                  type="button"
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="surface__summary">
+            AI enrichment runs after scans when enabled. It builds note briefs, tracks stale notes, and turns the course into a revision plan instead of a pile of files.
+          </p>
+          <div className="metric-strip">
+            <Metric label="Ready" value={String(dashboard?.ai.readyNotes ?? 0)} />
+            <Metric label="Pending" value={String(dashboard?.ai.pendingNotes ?? 0)} />
+            <Metric label="Missing" value={String(dashboard?.ai.missingNotes ?? 0)} />
+            <Metric label="Failed" value={String(dashboard?.ai.failedNotes ?? 0)} />
+            <Metric label="Stale" value={String(dashboard?.ai.staleNotes ?? 0)} />
+          </div>
+        </section>
+
+        <section className="surface">
+          <div className="surface__header">
+            <div>
+              <span className="surface__eyebrow">Course brief</span>
+              <h3>{dashboard?.ai.summary ? "AI revision brief" : "No AI brief yet"}</h3>
+            </div>
+            <div className="button-row">
+              <button
+                className="button button--subtle"
+                disabled={!selectedCourse || busyAction !== null || dashboard?.ai.status === "running"}
+                onClick={onGenerateCourseAi}
+                type="button"
+              >
+                {dashboard?.ai.status === "running" ? "Running..." : "Run AI"}
+              </button>
+              <button
+                className="button button--ghost"
+                disabled={!selectedCourse || busyAction !== null || dashboard?.ai.status === "running"}
+                onClick={onRefreshCourseAi}
+                type="button"
+              >
+                Refresh all
+              </button>
+            </div>
+          </div>
+          {dashboard?.ai.summary ? (
+            <div className="insight-stack">
+              <p className="inspector-copy">{dashboard.ai.summary}</p>
+              <section className="insight-list">
+                <strong>Revision priorities</strong>
+                <ul>
+                  {dashboard.ai.revisionPriorities.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </section>
+              <section className="insight-list">
+                <strong>Weak spots</strong>
+                <ul>
+                  {dashboard.ai.weakSpots.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </section>
+              <section className="insight-list">
+                <strong>Next actions</strong>
+                <ul>
+                  {dashboard.ai.nextActions.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </section>
+            </div>
+          ) : (
+            <EmptyState
+              title={
+                workspace.aiSettings?.enabled
+                  ? dashboard?.ai.status === "running"
+                    ? "AI is working in the background"
+                    : "Start the first AI run"
+                  : "AI is not enabled"
+              }
+              description={
+                workspace.aiSettings?.enabled
+                  ? "Run AI for this course to create note briefs and a course-level revision summary."
+                  : "Enable AI in Setup and save a valid API key to unlock course enrichment."
+              }
+            />
+          )}
+        </section>
+
+        <section className="surface">
+          <div className="surface__header">
+            <div>
+              <span className="surface__eyebrow">Note coverage</span>
+              <h3>AI note queue</h3>
+            </div>
+          </div>
+          {aiNotes.length ? (
+            <div className="row-list row-list--compact">
+              {aiNotes.map((note) => (
+                <article key={note.id} className={`row-item ${selectedNoteId === note.id ? "row-item--active" : ""}`}>
+                  <button className="row-item__main" onClick={() => onOpenNote(note.id)} type="button">
+                    <div className="row-item__title-row">
+                      <span className="row-item__title">{note.title}</span>
+                      <span className={`soft-badge soft-badge--${aiStatusTone(note.aiStatus)}`}>
+                        {aiStatusLabel(note.aiStatus)}
+                      </span>
+                    </div>
+                    <span className="row-item__subtitle">{note.relativePath}</span>
+                  </button>
+                  <div className="row-item__meta">
+                    <span>{note.linkCount} links</span>
+                    <span>{note.conceptCount} concepts</span>
+                    <span>{note.formulaCount} formulas</span>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <EmptyState
+              title="No notes in this AI filter"
+              description="Change the AI filter or run the course enrichment to populate this queue."
             />
           )}
         </section>
@@ -667,6 +841,35 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function aiStatusLabel(status: string) {
+  switch (status) {
+    case "complete":
+      return "Ready";
+    case "running":
+    case "queued":
+      return "Running";
+    case "failed":
+      return "Failed";
+    case "stale":
+      return "Stale";
+    default:
+      return "Missing";
+  }
+}
+
+function aiStatusTone(status: string) {
+  switch (status) {
+    case "complete":
+      return "success";
+    case "failed":
+      return "warning";
+    case "stale":
+      return "warning";
+    default:
+      return "neutral";
+  }
 }
 
 function ActionRow({

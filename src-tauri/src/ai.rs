@@ -22,6 +22,15 @@ pub struct AiNoteInsightPayload {
     pub connection_opportunities: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCourseBriefPayload {
+    pub summary: String,
+    pub revision_priorities: Vec<String>,
+    pub weak_spots: Vec<String>,
+    pub next_actions: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlashcardCard {
     pub question: String,
@@ -124,6 +133,43 @@ pub fn generate_note_insight(
     let json = send_chat_request(settings, payload)?;
     let content = message_content(&json)?;
     parse_json_blob::<AiNoteInsightPayload>(&content)
+}
+
+pub fn generate_course_brief(
+    settings: &AiProviderSettings,
+    course_name: &str,
+    top_concepts: &[String],
+    weak_notes: &[String],
+    note_payload: &str,
+) -> Result<AiCourseBriefPayload> {
+    ensure_required(settings)?;
+
+    let prompt = format!(
+        "You are preparing a student for the course `{course_name}`. Return strict JSON with keys \
+         `summary`, `revisionPriorities`, `weakSpots`, and `nextActions`. The summary must be a compact \
+         paragraph. The arrays should contain short, concrete bullets. Use the note insights to describe \
+         what to revise next, what is underlinked, and how to study efficiently.\n\
+         Top concepts: {}\n\
+         Weak notes: {}\n\
+         Note insights:\n{}",
+        top_concepts.join(", "),
+        weak_notes.join(" | "),
+        note_payload
+    );
+
+    let payload = json!({
+        "model": settings.model,
+        "temperature": 0.2,
+        "response_format": { "type": "json_object" },
+        "messages": [
+            { "role": "system", "content": "You are an exam preparation strategist. Return JSON only." },
+            { "role": "user", "content": prompt }
+        ]
+    });
+
+    let json = send_chat_request(settings, payload)?;
+    let content = message_content(&json)?;
+    parse_json_blob::<AiCourseBriefPayload>(&content)
 }
 
 fn ensure_required(settings: &AiProviderSettings) -> Result<()> {

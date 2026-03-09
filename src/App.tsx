@@ -15,6 +15,7 @@ import {
   runScan,
   saveAiSettings,
   saveCourseConfig,
+  startAiEnrichment,
   validateAiSettings,
 } from "./api";
 import { AppSidebar } from "./components/AppSidebar";
@@ -51,6 +52,7 @@ function App() {
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [selectedNoteIds, setSelectedNoteIds] = useState<string[]>([]);
   const [noteFilter, setNoteFilter] = useState<NoteFilter>("all");
+  const [aiFilter, setAiFilter] = useState<"all" | "ready" | "needs-work" | "failed">("all");
   const [noteDetails, setNoteDetails] = useState<NoteDetails | null>(null);
   const [vaultPath, setVaultPath] = useState("");
   const [courseDraft, setCourseDraft] = useState<CourseDraft>(createCourseDraft());
@@ -66,7 +68,8 @@ function App() {
   const selectedCourse = workspace.courses.find((course) => course.id === selectedCourseId) ?? null;
   const viewMeta = getViewMeta(activeView);
   const showInspector =
-    activeView === "notes" || activeView === "courses" || activeView === "settings";
+    activeView === "notes" || activeView === "courses" || activeView === "settings" || activeView === "ai";
+  const aiIsRunning = dashboard?.ai.status === "running";
 
   useEffect(() => {
     void refreshWorkspace();
@@ -182,6 +185,49 @@ function App() {
     }
   }, [courseDraft.id, workspace.courses]);
 
+  useEffect(() => {
+    if (!workspace.vault || !selectedCourseId || !aiIsRunning) {
+      return;
+    }
+
+    let cancelled = false;
+    const refresh = () => {
+      void getDashboard(selectedCourseId)
+        .then((nextDashboard) => {
+          if (!cancelled) {
+            setWorkspace((current) => ({
+              ...current,
+              dashboard: nextDashboard,
+            }));
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setErrorBanner("AI refresh failed", error);
+          }
+        });
+
+      if (selectedNoteId) {
+        void getNoteDetails(selectedNoteId)
+          .then((details) => {
+            if (!cancelled) {
+              setNoteDetails(details);
+            }
+          })
+          .catch(() => {
+            // Keep the current note pane stable while background AI is running.
+          });
+      }
+    };
+
+    refresh();
+    const interval = window.setInterval(refresh, 2200);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [aiIsRunning, selectedCourseId, selectedNoteId, workspace.vault]);
+
   async function refreshWorkspace() {
     try {
       const snapshot = await loadWorkspace();
@@ -221,6 +267,7 @@ function App() {
       setSelectedNoteId(null);
       setSelectedNoteIds([]);
       setNoteFilter("all");
+      setAiFilter("all");
     });
   }
 
@@ -257,6 +304,7 @@ function App() {
       setSelectedNoteId(null);
       setSelectedNoteIds([]);
       setNoteFilter("all");
+      setAiFilter("all");
       setActiveView(nextView);
     });
   }
@@ -398,10 +446,14 @@ function App() {
     void runBusyTask("Scan failed", runScan, ({ workspace: next, report }) => {
       applyWorkspace(next);
       setScanReport(report);
+      const aiStarted = next.dashboard?.ai.status === "running";
+
       setBanner({
         tone: "success",
         title: isPreview ? "Preview index refreshed" : "Scan completed",
-        detail: `${report.changedNotes} changed, ${report.unchangedNotes} unchanged, ${report.generatedWeakLinks} weak-note suggestions.`,
+        detail: aiStarted
+          ? `${report.changedNotes} changed, ${report.unchangedNotes} unchanged, ${report.generatedWeakLinks} weak-note suggestions. AI enrichment started in the background.`
+          : `${report.changedNotes} changed, ${report.unchangedNotes} unchanged, ${report.generatedWeakLinks} weak-note suggestions.`,
       });
     });
   };
@@ -422,10 +474,38 @@ function App() {
         tone: "success",
         title: "AI settings saved",
         detail: aiDraft.enabled
-          ? "Optional model refinement is armed for the next scan."
+          ? "AI enrichment is armed. The app can start course enrichment after scans."
           : "Local extraction remains the active path.",
       });
     });
+
+  const beginCourseAiEnrichment = (force = false, nextCourseId = selectedCourseId) => {
+    if (!nextCourseId) {
+      setBanner({
+        tone: "error",
+        title: "Course required",
+        detail: "Choose a course before starting AI enrichment.",
+      });
+      return;
+    }
+
+    void runBusyTask(
+      "AI enrichment start failed",
+      () => startAiEnrichment(nextCourseId, force),
+      (summary) => {
+        setWorkspace((current) =>
+          current.dashboard && current.dashboard.selectedCourseId === nextCourseId
+            ? { ...current, dashboard: { ...current.dashboard, ai: summary } }
+            : current,
+        );
+        setBanner({
+          tone: "success",
+          title: force ? "AI refresh started" : "AI enrichment started",
+          detail: `${summary.pendingNotes || summary.missingNotes || summary.staleNotes} notes are being prepared in the background.`,
+        });
+      },
+    );
+  };
 
   const createFlashcards = () => {
     if (!selectedCourseId || selectedNoteIds.length === 0) {
@@ -497,7 +577,9 @@ function App() {
 
     void runBusyTask("AI note insight failed", () => generateNoteAiInsight(selectedNoteId), (result) => {
       setNoteDetails((current) =>
-        current && current.id === result.noteId ? { ...current, aiInsight: result } : current,
+        current && current.id === result.noteId
+          ? { ...current, aiInsight: result, aiStatus: "complete", aiError: null }
+          : current,
       );
       setBanner({
         tone: "success",
@@ -522,12 +604,14 @@ function App() {
       <div className="workspace-shell">
         <Topbar
           activeView={activeView}
+          aiStatus={dashboard?.ai ?? null}
           busyAction={busyAction}
           dashboard={dashboard}
           runtimeMode={runtimeMode}
           scanStatus={workspace.scanStatus}
           selectedCourse={selectedCourse}
           title={viewMeta.label}
+          onRunAi={() => beginCourseAiEnrichment(false)}
           onRefresh={() => void refreshWorkspace()}
           onScan={scan}
         />
@@ -541,6 +625,7 @@ function App() {
           <main className="content-pane">
             <MainPane
               activeView={activeView}
+              aiFilter={aiFilter}
               busyAction={busyAction}
               flashcardResult={flashcardResult}
               noteFilter={noteFilter}
@@ -551,9 +636,12 @@ function App() {
               selectedNoteId={selectedNoteId}
               selectedNoteIds={selectedNoteIds}
               workspace={workspace}
+              onChangeAiFilter={setAiFilter}
               onChangeNoteFilter={setNoteFilter}
               onCreateRevisionNote={createRevisionNote}
               onGenerateFlashcards={createFlashcards}
+              onGenerateCourseAi={() => beginCourseAiEnrichment(false)}
+              onRefreshCourseAi={() => beginCourseAiEnrichment(true)}
               onOpenNote={focusNote}
               onSelectCourse={(courseId) => focusCourse(courseId, "courses")}
               onStartNewCourse={startNewCourse}
@@ -587,11 +675,12 @@ function App() {
               onConnectVault={connect}
               onDeleteCourse={removeCourse}
               onDisconnectVault={disconnect}
+              onGenerateCourseAi={() => beginCourseAiEnrichment(false)}
               onResetCourseDraft={resetCourseDraft}
-            onSaveAiSettings={saveAi}
-            onSaveCourse={saveCourse}
-            onGenerateNoteAiInsight={createNoteAiInsight}
-            onUpdateAiField={updateAiField}
+              onSaveAiSettings={saveAi}
+              onSaveCourse={saveCourse}
+              onGenerateNoteAiInsight={createNoteAiInsight}
+              onUpdateAiField={updateAiField}
               onUpdateCourseField={updateCourseField}
               onValidateAiSettings={validateAi}
               onVaultPathChange={setVaultPath}

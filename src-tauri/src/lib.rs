@@ -3,12 +3,14 @@ mod db;
 mod markdown;
 mod models;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use db::Database;
 use models::{
-    AiNoteInsight, AiSettingsInput, CourseConfigInput, DashboardData,
+    AiCourseSummary, AiNoteInsight, AiSettingsInput, CourseConfigInput, DashboardData,
     FlashcardGenerationRequest, FlashcardGenerationResult, NoteDetails, RevisionNoteRequest,
     RevisionNoteResult, ScanReport, ValidationResult, WorkspaceSnapshot,
 };
@@ -19,6 +21,7 @@ use tauri::{AppHandle, Manager, State};
 struct AppState {
     db_path: PathBuf,
     export_dir: PathBuf,
+    active_ai_courses: Arc<Mutex<HashSet<String>>>,
 }
 
 #[derive(Serialize)]
@@ -94,13 +97,41 @@ async fn delete_course(
 #[tauri::command]
 async fn run_scan(state: State<'_, AppState>) -> Result<RunScanResponse, String> {
     let state = state.inner().clone();
-    blocking(move || {
-        let database = Database::open(&state.db_path)?;
-        let report = database.run_scan()?;
-        let workspace = database.load_workspace()?;
-        Ok(RunScanResponse { workspace, report })
+    let (report, auto_course_id) = blocking({
+        let state = state.clone();
+        move || {
+            let database = Database::open(&state.db_path)?;
+            let report = database.run_scan()?;
+            let workspace = database.load_workspace()?;
+            let auto_course_id = workspace.selected_course_id.clone().filter(|_| {
+                workspace
+                    .ai_settings
+                    .as_ref()
+                    .map(|settings| settings.enabled && settings.has_api_key)
+                    .unwrap_or(false)
+            });
+
+            if let Some(course_id) = auto_course_id.as_ref() {
+                let _ = database.queue_ai_enrichment(course_id, false)?;
+            }
+
+            Ok((report, auto_course_id))
+        }
     })
-    .await
+    .await?;
+
+    if let Some(course_id) = auto_course_id {
+        spawn_ai_enrichment_thread(state.clone(), course_id, false)?;
+    }
+
+    let workspace = blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        let workspace = database.load_workspace()?;
+        Ok(workspace)
+    })
+    .await?;
+
+    Ok(RunScanResponse { workspace, report })
 }
 
 #[tauri::command]
@@ -140,6 +171,31 @@ async fn generate_note_ai_insight(
         database.generate_note_ai_insight(&note_id)
     })
     .await
+}
+
+#[tauri::command]
+async fn start_ai_enrichment(
+    course_id: String,
+    force: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<AiCourseSummary, String> {
+    let state = state.inner().clone();
+    let force = force.unwrap_or(false);
+    let course_id_for_thread = course_id.clone();
+
+    let summary = blocking({
+        let state = state.clone();
+        let course_id = course_id.clone();
+        move || {
+            let database = Database::open(&state.db_path)?;
+            database.queue_ai_enrichment(&course_id, force)
+        }
+    })
+    .await?;
+
+    spawn_ai_enrichment_thread(state, course_id_for_thread, force)?;
+
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -205,6 +261,45 @@ where
         .map_err(|error| error.to_string())?
 }
 
+fn spawn_ai_enrichment_thread(
+    state: AppState,
+    course_id: String,
+    force: bool,
+) -> Result<(), String> {
+    let should_spawn = {
+        let mut active = state
+            .active_ai_courses
+            .lock()
+            .map_err(|_| "failed to lock AI course registry".to_string())?;
+        active.insert(course_id.clone())
+    };
+
+    if !should_spawn {
+        return Ok(());
+    }
+
+    let state_for_thread = state.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<()> {
+            let database = Database::open(&state_for_thread.db_path)?;
+            database.run_ai_enrichment(&course_id, force)
+        })();
+
+        if let Err(error) = result {
+            if let Ok(database) = Database::open(&state_for_thread.db_path) {
+                let _ = database.mark_ai_enrichment_failed(&course_id, &error.to_string());
+            }
+            eprintln!("AI enrichment failed for {course_id}: {error}");
+        }
+
+        if let Ok(mut active) = state_for_thread.active_ai_courses.lock() {
+            active.remove(&course_id);
+        }
+    });
+
+    Ok(())
+}
+
 fn build_state(app: &AppHandle) -> Result<AppState> {
     let app_data_dir = app
         .path()
@@ -214,6 +309,7 @@ fn build_state(app: &AppHandle) -> Result<AppState> {
     Ok(AppState {
         db_path: app_data_dir.join("obsidian-exam-os.sqlite"),
         export_dir,
+        active_ai_courses: Arc::new(Mutex::new(HashSet::new())),
     })
 }
 
@@ -236,6 +332,7 @@ pub fn run() {
             get_dashboard,
             get_note_details,
             generate_note_ai_insight,
+            start_ai_enrichment,
             save_ai_settings,
             validate_ai_settings,
             generate_flashcards,

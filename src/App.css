@@ -97,7 +97,7 @@ code {
 .sidebar__group,
 .topbar__copy,
 .topbar__meta,
-.surface__header > :not(.toolbar),
+.surface__header > :not(.toolbar):not(.button-row),
 .action-row__copy,
 .action-row__aside,
 .countdown-panel {
@@ -593,6 +593,16 @@ code {
   background: rgba(240, 187, 109, 0.1);
 }
 
+.soft-badge--success {
+  color: var(--success);
+  background: rgba(115, 208, 165, 0.1);
+}
+
+.soft-badge--neutral {
+  color: var(--text-soft);
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .line-item {
   width: 100%;
   display: flex;
@@ -669,6 +679,11 @@ code {
 .toolbar__item--active {
   color: var(--text);
   background: rgba(255, 255, 255, 0.08);
+}
+
+.button-row {
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .action-row {
