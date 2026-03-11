@@ -1,5 +1,6 @@
 export type AppView =
   | "overview"
+  | "statistics"
   | "notes"
   | "formulas"
   | "ai"
@@ -21,6 +22,11 @@ export const APP_VIEWS: Array<{
     id: "overview",
     label: "Overview",
     description: "Track the active course, countdown, graph health, and the next revision moves.",
+  },
+  {
+    id: "statistics",
+    label: "Statistics",
+    description: "Review course and vault graphs for coverage, graph health, exam progress, and vault activity.",
   },
   {
     id: "notes",

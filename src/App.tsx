@@ -21,6 +21,7 @@ import {
   generateRevisionNote,
   getRuntimeMode,
   getDashboard,
+  getStatistics,
   getNoteDetails,
   listChatThreads,
   loadWorkspace,
@@ -40,6 +41,7 @@ import { ExamsWorkspace } from "./components/ExamsWorkspace";
 import { FormulaWorkspace } from "./components/FormulaWorkspace";
 import { InspectorPane } from "./components/InspectorPane";
 import { MainPane } from "./components/MainPane";
+import { StatisticsWorkspace } from "./components/StatisticsWorkspace";
 import { type AppView, type NoteFilter, getViewMeta } from "./components/appShell";
 import { Topbar } from "./components/Topbar";
 import {
@@ -73,6 +75,8 @@ import type {
   RevisionNoteResult,
   ScanReport,
   SendChatMessageRequest,
+  StatisticsResponse,
+  StatisticsScope,
   WorkspaceSnapshot,
 } from "./types";
 
@@ -106,6 +110,8 @@ function App() {
   const [selectedFormulaId, setSelectedFormulaId] = useState<string | null>(null);
   const [formulaDetails, setFormulaDetails] = useState<FormulaDetails | null>(null);
   const [chatScope, setChatScope] = useState<ChatScope>("course");
+  const [statisticsScope, setStatisticsScope] = useState<StatisticsScope>("course");
+  const [statisticsData, setStatisticsData] = useState<StatisticsResponse | null>(null);
   const [courseChatThreads, setCourseChatThreads] = useState<ChatThreadSummary[]>([]);
   const [vaultChatThreads, setVaultChatThreads] = useState<ChatThreadSummary[]>([]);
   const [selectedChatThreadId, setSelectedChatThreadId] = useState<string | null>(null);
@@ -271,6 +277,34 @@ function App() {
       cancelled = true;
     };
   }, [isPreview, selectedCourseId, workspace.vault]);
+
+  useEffect(() => {
+    if (activeView !== "statistics") {
+      return;
+    }
+
+    if ((!workspace.vault && !isPreview) || (statisticsScope === "course" && !selectedCourseId)) {
+      setStatisticsData(null);
+      return;
+    }
+
+    let cancelled = false;
+    void getStatistics(statisticsScope, statisticsScope === "course" ? selectedCourseId : null)
+      .then((nextStatistics) => {
+        if (!cancelled) {
+          setStatisticsData(nextStatistics);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorBanner("Statistics failed to load", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, isPreview, selectedCourseId, statisticsScope, workspace.vault]);
 
   useEffect(() => {
     if ((!workspace.vault && !isPreview) || (!selectedCourseId && chatScope === "course")) {
@@ -575,6 +609,7 @@ function App() {
     setFormulaWorkspace(null);
     setSelectedFormulaId(null);
     setFormulaDetails(null);
+    setStatisticsData(null);
     setCourseChatThreads([]);
     setVaultChatThreads([]);
     setSelectedChatThreadId(null);
@@ -591,6 +626,7 @@ function App() {
       setSelectedNoteIds([]);
       setNoteFilter("all");
       setAiFilter("all");
+      setStatisticsScope("course");
     });
   }
 
@@ -1371,6 +1407,14 @@ function App() {
                   setSelectedChatThreadId(threadId);
                 }}
                 onSendMessage={sendPromptToChat}
+              />
+            ) : activeView === "statistics" ? (
+              <StatisticsWorkspace
+                runtimeMode={runtimeMode}
+                scope={statisticsScope}
+                statistics={statisticsData}
+                selectedCourse={selectedCourse}
+                onChangeScope={setStatisticsScope}
               />
             ) : (
               <MainPane

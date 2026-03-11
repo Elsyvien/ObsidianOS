@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::SystemTime;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -16,17 +18,24 @@ use crate::markdown::{normalize_key, note_title_candidates, parse_markdown};
 use crate::models::{
     AiCourseSummary, AiNoteInsight, AiSettings, AiSettingsInput, ApplyExamReviewActionsRequest,
     ChatCitation, ChatMessage, ChatMessageRole, ChatScope, ChatThreadDetails, ChatThreadSummary,
-    ConceptMetric, Countdown, CourseConfig, CourseConfigInput, CoverageStats,
+    ConceptMetric, Countdown, CourseConfig, CourseConfigInput, CourseStatisticsRow, CoverageStats,
     CreateChatThreadRequest, DashboardData, ExamAnswerValue, ExamAttemptResult, ExamAttemptSummary,
     ExamBuilderInput, ExamDefaults, ExamDetails, ExamDifficulty, ExamPreset, ExamQuestion,
     ExamQuestionResult, ExamQuestionType, ExamReviewSuggestion, ExamSourceNote, ExamStatus,
     ExamSubmissionRequest, ExamSummary, ExamVerdict, ExamWorkspaceSnapshot, ExamWorkspaceSummary,
     FlashcardGenerationRequest, FlashcardGenerationResult, FlashcardSummary, FormulaBrief,
     FormulaDetails, FormulaLinkedNote, FormulaMetric, FormulaSummary, FormulaWorkspaceSnapshot,
-    FormulaWorkspaceSummary, GenerateFormulaBriefRequest, GraphStats, NoteChunkPreview,
-    NoteDetails, NoteMasteryState, NoteSummary, RevisionNoteRequest, RevisionNoteResult,
-    RevisionSummary, ScanReport, ScanStatus, SendChatMessageRequest, ValidationResult, VaultConfig,
-    WeakNote, WorkspaceSnapshot,
+    FormulaWorkspaceSummary, GenerateFormulaBriefRequest, GitCommitItem, GitCourseActivityRow,
+    GitNoteActivityRow, GitSummary, GitTimelinePoint, GraphStats, NoteChunkPreview, NoteDetails,
+    NoteMasteryState, NoteSummary, RevisionNoteRequest, RevisionNoteResult, RevisionSummary,
+    ScanReport, ScanStatus, SendChatMessageRequest, StatisticsAiSection,
+    StatisticsCountBucket, StatisticsExamPoint, StatisticsExamsSection, StatisticsHighlight,
+    StatisticsKnowledgeSection, StatisticsKnowledgeSummary, StatisticsNoteRow,
+    StatisticsNotesSection, StatisticsNotesSummary, StatisticsOutputsSection,
+    StatisticsOutputsSummary, StatisticsOverview, StatisticsOverviewSection, StatisticsResponse,
+    StatisticsScope, StatisticsSnapshotPoint, StatisticsValuePoint, StatisticsVaultActivitySection,
+    StatisticsGitSection, StatisticsAiSummary, StatisticsExamsSummary, ValidationResult,
+    VaultActivityBucket, VaultActivitySummary, VaultConfig, WeakNote, WorkspaceSnapshot,
 };
 
 pub struct Database {
@@ -58,6 +67,7 @@ struct StoredNote {
     title: String,
     relative_path: String,
     content_hash: String,
+    source_modified_at: Option<String>,
     excerpt: String,
     headings: Vec<String>,
     links: Vec<String>,
@@ -233,6 +243,35 @@ struct StoredChatThread {
     updated_at: String,
 }
 
+#[derive(Debug, Clone)]
+struct CourseStatisticsBundle {
+    overview: StatisticsOverview,
+    flashcards: FlashcardSummary,
+    revision: RevisionSummary,
+    notes: Vec<StatisticsNoteRow>,
+    concepts: Vec<ConceptMetric>,
+    formulas: Vec<FormulaMetric>,
+}
+
+#[derive(Debug, Clone)]
+struct GitCommitRecord {
+    sha: String,
+    committed_at: String,
+    author_name: String,
+    summary: String,
+    paths: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct GitAnalytics {
+    summary: GitSummary,
+    commit_timeline: Vec<GitTimelinePoint>,
+    churn_timeline: Vec<GitTimelinePoint>,
+    course_activity: Vec<GitCourseActivityRow>,
+    top_notes: Vec<GitNoteActivityRow>,
+    recent_commits: Vec<GitCommitItem>,
+}
+
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
@@ -290,6 +329,7 @@ impl Database {
               relative_path TEXT NOT NULL,
               title TEXT NOT NULL,
               content_hash TEXT NOT NULL,
+              source_modified_at TEXT,
               frontmatter TEXT,
               frontmatter_exam_date TEXT,
               excerpt TEXT NOT NULL,
@@ -555,6 +595,37 @@ impl Database {
               FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE,
               FOREIGN KEY (source_note_id) REFERENCES note_records(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS stats_snapshots (
+              id TEXT PRIMARY KEY,
+              scope TEXT NOT NULL,
+              course_id TEXT,
+              captured_at TEXT NOT NULL,
+              note_count INTEGER NOT NULL,
+              total_concepts INTEGER NOT NULL,
+              covered_concepts INTEGER NOT NULL,
+              coverage_percentage REAL NOT NULL,
+              edge_count INTEGER NOT NULL,
+              strong_links INTEGER NOT NULL,
+              inferred_links INTEGER NOT NULL,
+              isolated_notes INTEGER NOT NULL,
+              weak_note_count INTEGER NOT NULL,
+              formula_count INTEGER NOT NULL,
+              notes_with_formulas INTEGER NOT NULL DEFAULT 0,
+              average_note_strength REAL NOT NULL DEFAULT 0,
+              flashcard_set_count INTEGER NOT NULL DEFAULT 0,
+              flashcard_total_cards INTEGER NOT NULL DEFAULT 0,
+              revision_run_count INTEGER NOT NULL DEFAULT 0,
+              latest_revision_item_count INTEGER NOT NULL DEFAULT 0,
+              ai_ready_notes INTEGER NOT NULL DEFAULT 0,
+              ai_pending_notes INTEGER NOT NULL DEFAULT 0,
+              ai_failed_notes INTEGER NOT NULL DEFAULT 0,
+              ai_stale_notes INTEGER NOT NULL DEFAULT 0,
+              ai_missing_notes INTEGER NOT NULL DEFAULT 0,
+              exam_attempt_count INTEGER NOT NULL,
+              latest_exam_score REAL,
+              average_exam_score REAL,
+              FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE
+            );
             CREATE INDEX IF NOT EXISTS idx_notes_course ON note_records(course_id);
             CREATE INDEX IF NOT EXISTS idx_concepts_course ON concept_records(course_id);
             CREATE INDEX IF NOT EXISTS idx_formulas_course ON formula_records(course_id);
@@ -574,7 +645,64 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_exam_attempts_exam ON exam_attempts(exam_id, submitted_at DESC);
             CREATE INDEX IF NOT EXISTS idx_exam_attempts_course ON exam_attempts(course_id, submitted_at DESC);
             CREATE INDEX IF NOT EXISTS idx_exam_attempt_results_attempt ON exam_attempt_question_results(attempt_id, position);
+            CREATE INDEX IF NOT EXISTS idx_stats_snapshots_scope ON stats_snapshots(scope, course_id, captured_at ASC);
             "#,
+        )?;
+        self.ensure_column_exists("note_records", "source_modified_at", "TEXT")?;
+        self.ensure_column_exists(
+            "stats_snapshots",
+            "notes_with_formulas",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column_exists(
+            "stats_snapshots",
+            "average_note_strength",
+            "REAL NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column_exists(
+            "stats_snapshots",
+            "flashcard_set_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column_exists(
+            "stats_snapshots",
+            "flashcard_total_cards",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column_exists(
+            "stats_snapshots",
+            "revision_run_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column_exists(
+            "stats_snapshots",
+            "latest_revision_item_count",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column_exists(
+            "stats_snapshots",
+            "ai_ready_notes",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column_exists(
+            "stats_snapshots",
+            "ai_pending_notes",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column_exists(
+            "stats_snapshots",
+            "ai_failed_notes",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column_exists(
+            "stats_snapshots",
+            "ai_stale_notes",
+            "INTEGER NOT NULL DEFAULT 0",
+        )?;
+        self.ensure_column_exists(
+            "stats_snapshots",
+            "ai_missing_notes",
+            "INTEGER NOT NULL DEFAULT 0",
         )?;
         self.ensure_column_exists("chat_citations", "course_id", "TEXT NOT NULL DEFAULT ''")?;
         self.ensure_column_exists("chat_citations", "course_name", "TEXT NOT NULL DEFAULT ''")?;
@@ -887,6 +1015,645 @@ impl Database {
                 ai_run.as_ref(),
             ),
         }))
+    }
+
+    pub fn get_statistics(
+        &self,
+        scope: StatisticsScope,
+        course_id: Option<String>,
+    ) -> Result<Option<StatisticsResponse>> {
+        let vault = self
+            .get_vault_config()?
+            .ok_or_else(|| anyhow!("no vault connected"))?;
+        let courses = self.list_courses()?;
+        if courses.is_empty() {
+            return Ok(None);
+        }
+
+        let (selected_course, course_bundles) = match scope {
+            StatisticsScope::Course => {
+                let selected_id = course_id
+                    .or_else(|| self.get_selected_course_id().ok().flatten())
+                    .and_then(|id| {
+                        courses
+                            .iter()
+                            .find(|course| course.id == id)
+                            .map(|course| course.id.clone())
+                    })
+                    .unwrap_or_else(|| courses[0].id.clone());
+                let course = courses
+                    .iter()
+                    .find(|entry| entry.id == selected_id)
+                    .ok_or_else(|| anyhow!("selected course does not exist"))?;
+
+                self.set_selected_course(Some(&selected_id))?;
+                (
+                    Some(course.clone()),
+                    vec![self.build_course_statistics_bundle(course)?],
+                )
+            }
+            StatisticsScope::Vault => {
+                let bundles = courses
+                    .iter()
+                    .map(|course| self.build_course_statistics_bundle(course))
+                    .collect::<Result<Vec<_>>>()?;
+                (None, bundles)
+            }
+        };
+
+        let history = self.list_statistics_history(scope, selected_course.as_ref().map(|course| course.id.as_str()))?;
+        let exam_history =
+            self.list_statistics_exam_points(selected_course.as_ref().map(|course| course.id.as_str()))?;
+        let activity_buckets =
+            self.build_activity_buckets(selected_course.as_ref().map(|course| course.id.as_str()))?;
+        let course_rows = if scope == StatisticsScope::Vault {
+            self.build_course_statistics_rows(&courses)?
+        } else {
+            Vec::new()
+        };
+        let overview_summary = if scope == StatisticsScope::Vault {
+            self.build_vault_statistics_overview(&courses)?
+        } else {
+            course_bundles[0].overview.clone()
+        };
+
+        let top_concepts = if scope == StatisticsScope::Vault {
+            let raw = courses
+                .iter()
+                .flat_map(|course| self.list_concepts(&course.id).unwrap_or_default())
+                .collect::<Vec<_>>();
+            build_top_concepts(&raw)
+        } else {
+            course_bundles[0].concepts.clone()
+        };
+        let top_formulas = if scope == StatisticsScope::Vault {
+            let raw = courses
+                .iter()
+                .flat_map(|course| self.list_formulas(&course.id).unwrap_or_default())
+                .collect::<Vec<_>>();
+            build_top_formulas(&raw)
+        } else {
+            course_bundles[0].formulas.clone()
+        };
+        let note_rows = course_bundles
+            .iter()
+            .flat_map(|bundle| bundle.notes.clone())
+            .collect::<Vec<_>>();
+        let recent_notes = self.build_recent_notes(&note_rows);
+        let attempt_history = build_attempt_history(&exam_history);
+        let verdict_mix =
+            self.build_exam_verdict_mix(selected_course.as_ref().map(|course| course.id.as_str()))?;
+        let mastery_distribution =
+            self.build_mastery_distribution(selected_course.as_ref().map(|course| course.id.as_str()))?;
+        let latest_flashcards = aggregate_flashcard_summary(&course_bundles);
+        let latest_revision = aggregate_revision_summary(&course_bundles);
+        let git_result =
+            self.try_build_git_analytics(&vault.vault_path, &courses, scope, selected_course.as_ref())?;
+        let (git_available, git_error, git_data) = match git_result {
+            Ok(value) => (value.is_some(), None, value),
+            Err(error) => (false, Some(error), None),
+        };
+        let highlights = build_overview_highlights(&course_rows, git_data.as_ref());
+        let overview = StatisticsOverviewSection {
+            summary: overview_summary.clone(),
+            history: history.clone(),
+            course_rows: course_rows.clone(),
+            highlights,
+        };
+        let knowledge = StatisticsKnowledgeSection {
+            summary: StatisticsKnowledgeSummary {
+                total_concepts: overview_summary.total_concepts,
+                covered_concepts: overview_summary.covered_concepts,
+                coverage_percentage: overview_summary.coverage_percentage,
+                formula_count: overview_summary.formula_count,
+                notes_with_formulas: overview_summary.notes_with_formulas,
+            },
+            history: history.clone(),
+            top_concepts,
+            top_formulas,
+            formula_density_buckets: build_formula_density_buckets(&note_rows),
+            course_rows: course_rows.clone(),
+        };
+        let notes = StatisticsNotesSection {
+            summary: StatisticsNotesSummary {
+                note_count: overview_summary.note_count,
+                average_note_strength: overview_summary.average_note_strength,
+                weak_note_count: overview_summary.weak_note_count,
+                isolated_notes: overview_summary.isolated_notes,
+                stale_note_count: note_rows.iter().filter(|note| is_stale_modified_at(note.modified_at.as_deref())).count(),
+            },
+            history: history.clone(),
+            strength_buckets: build_strength_buckets(&note_rows),
+            activity_buckets: activity_buckets.clone(),
+            weakest_notes: sort_note_rows_by_strength(&note_rows, false),
+            most_connected_notes: sort_note_rows_by_links(&note_rows),
+            stalest_notes: sort_note_rows_by_modified_at(&note_rows),
+            most_changed_notes: git_data
+                .as_ref()
+                .map(|git| git.top_notes.clone())
+                .unwrap_or_default(),
+        };
+        let exams = StatisticsExamsSection {
+            summary: StatisticsExamsSummary {
+                attempt_count: overview_summary.exam_attempt_count,
+                latest_score: overview_summary.latest_exam_score,
+                average_score: overview_summary.average_exam_score,
+                review_count: self.count_note_mastery_state(
+                    selected_course.as_ref().map(|course| course.id.as_str()),
+                    NoteMasteryState::Review,
+                )?,
+                mastered_count: self.count_note_mastery_state(
+                    selected_course.as_ref().map(|course| course.id.as_str()),
+                    NoteMasteryState::Mastered,
+                )?,
+            },
+            score_history: exam_history.clone(),
+            attempt_history,
+            verdict_mix,
+            mastery_distribution,
+            recent_exams: recent_exam_points(&exam_history),
+            weakest_attempts: weakest_exam_points(&exam_history),
+        };
+        let ai = StatisticsAiSection {
+            summary: StatisticsAiSummary {
+                ready_notes: overview_summary.ai_ready_notes,
+                pending_notes: overview_summary.ai_pending_notes,
+                failed_notes: overview_summary.ai_failed_notes,
+                stale_notes: overview_summary.ai_stale_notes,
+                missing_notes: overview_summary.ai_missing_notes,
+            },
+            history: history.clone(),
+            status_breakdown: vec![
+                StatisticsCountBucket {
+                    label: "Ready".to_string(),
+                    count: overview_summary.ai_ready_notes,
+                },
+                StatisticsCountBucket {
+                    label: "Queued".to_string(),
+                    count: overview_summary.ai_pending_notes,
+                },
+                StatisticsCountBucket {
+                    label: "Failed".to_string(),
+                    count: overview_summary.ai_failed_notes,
+                },
+                StatisticsCountBucket {
+                    label: "Stale".to_string(),
+                    count: overview_summary.ai_stale_notes,
+                },
+                StatisticsCountBucket {
+                    label: "Missing".to_string(),
+                    count: overview_summary.ai_missing_notes,
+                },
+            ],
+            failed_notes: note_rows
+                .iter()
+                .filter(|note| note.ai_status == "failed")
+                .take(8)
+                .cloned()
+                .collect(),
+            stale_notes: note_rows
+                .iter()
+                .filter(|note| note.ai_status == "stale" || note.ai_status == "missing")
+                .take(8)
+                .cloned()
+                .collect(),
+            course_rows: course_rows.clone(),
+        };
+        let outputs = StatisticsOutputsSection {
+            summary: StatisticsOutputsSummary {
+                flashcard_set_count: overview_summary.flashcard_set_count,
+                flashcard_total_cards: overview_summary.flashcard_total_cards,
+                revision_run_count: overview_summary.revision_run_count,
+                latest_revision_item_count: overview_summary.latest_revision_item_count,
+                latest_flashcard_export: latest_flashcards.export_path.clone(),
+                latest_revision_note: latest_revision.note_path.clone(),
+            },
+            history: history.clone(),
+            output_mix: vec![
+                StatisticsCountBucket {
+                    label: "Flashcard sets".to_string(),
+                    count: overview_summary.flashcard_set_count,
+                },
+                StatisticsCountBucket {
+                    label: "Flashcard cards".to_string(),
+                    count: overview_summary.flashcard_total_cards,
+                },
+                StatisticsCountBucket {
+                    label: "Revision runs".to_string(),
+                    count: overview_summary.revision_run_count,
+                },
+            ],
+            latest_flashcards,
+            latest_revision,
+            course_rows: course_rows.clone(),
+        };
+        let vault_activity = StatisticsVaultActivitySection {
+            summary: build_vault_activity_summary(&activity_buckets, &note_rows),
+            activity_buckets,
+            recent_notes,
+            course_activity: if scope == StatisticsScope::Vault {
+                course_rows.clone()
+            } else {
+                Vec::new()
+            },
+            git_timeline: git_data
+                .as_ref()
+                .map(|git| git.commit_timeline.clone())
+                .unwrap_or_default(),
+            git_course_activity: git_data
+                .as_ref()
+                .map(|git| git.course_activity.clone())
+                .unwrap_or_default(),
+            git_top_notes: git_data
+                .as_ref()
+                .map(|git| git.top_notes.clone())
+                .unwrap_or_default(),
+            recent_commits: git_data
+                .as_ref()
+                .map(|git| git.recent_commits.clone())
+                .unwrap_or_default(),
+        };
+
+        Ok(Some(StatisticsResponse {
+            scope,
+            generated_at: now_string(),
+            course_id: selected_course.as_ref().map(|course| course.id.clone()),
+            course_name: selected_course.as_ref().map(|course| course.name.clone()),
+            git_available,
+            git_error,
+            overview,
+            knowledge,
+            notes,
+            exams,
+            ai,
+            outputs,
+            vault_activity,
+            git: git_data.map(|git| StatisticsGitSection {
+                summary: git.summary,
+                commit_timeline: git.commit_timeline,
+                churn_timeline: git.churn_timeline,
+                course_activity: git.course_activity,
+                top_notes: git.top_notes,
+                recent_commits: git.recent_commits,
+            }),
+        }))
+    }
+
+    fn build_course_statistics_bundle(&self, course: &StoredCourse) -> Result<CourseStatisticsBundle> {
+        let notes = self.list_notes(&course.id)?;
+        let concepts = self.list_concepts(&course.id)?;
+        let formulas = self.list_formulas(&course.id)?;
+        let edges = self.list_edges(&course.id)?;
+        let flashcard_sets = self.list_flashcard_sets(&course.id)?;
+        let revision_runs = self.list_revision_runs(&course.id)?;
+        let ai_states = self.list_ai_note_states(&course.id)?;
+        let flashcards = build_flashcard_summary(&flashcard_sets);
+        let revision = build_revision_summary(&revision_runs);
+        let note_summaries = build_note_summaries(&notes, &edges, &concepts, &formulas, &ai_states);
+        let note_lookup = notes
+            .iter()
+            .map(|note| (note.id.clone(), note))
+            .collect::<HashMap<_, _>>();
+        let note_rows = note_summaries
+            .into_iter()
+            .map(|summary| StatisticsNoteRow {
+                note_id: summary.id.clone(),
+                title: summary.title.clone(),
+                relative_path: summary.relative_path.clone(),
+                course_id: Some(course.id.clone()),
+                course_name: Some(course.name.clone()),
+                ai_status: summary.ai_status.clone(),
+                strength: summary.strength,
+                link_count: summary.link_count,
+                concept_count: summary.concept_count,
+                formula_count: summary.formula_count,
+                modified_at: note_lookup
+                    .get(&summary.id)
+                    .and_then(|note| note.source_modified_at.clone()),
+            })
+            .collect::<Vec<_>>();
+
+        Ok(CourseStatisticsBundle {
+            overview: self.build_course_statistics_overview(&course.id)?,
+            flashcards,
+            revision,
+            notes: note_rows,
+            concepts: build_top_concepts(&concepts),
+            formulas: build_top_formulas(&formulas),
+        })
+    }
+
+    fn build_recent_notes(&self, note_rows: &[StatisticsNoteRow]) -> Vec<StatisticsNoteRow> {
+        let mut rows = note_rows.to_vec();
+        rows.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
+        rows.into_iter().take(10).collect()
+    }
+
+    fn build_exam_verdict_mix(
+        &self,
+        course_id: Option<&str>,
+    ) -> Result<Vec<StatisticsCountBucket>> {
+        let mut buckets = vec![
+            StatisticsCountBucket {
+                label: "Correct".to_string(),
+                count: 0,
+            },
+            StatisticsCountBucket {
+                label: "Partial".to_string(),
+                count: 0,
+            },
+            StatisticsCountBucket {
+                label: "Incorrect".to_string(),
+                count: 0,
+            },
+        ];
+
+        let rows = match course_id {
+            Some(course_id) => {
+                let mut statement = self.conn.prepare(
+                    r#"
+                    SELECT exam_attempt_question_results.verdict, COUNT(*)
+                    FROM exam_attempt_question_results
+                    INNER JOIN exam_attempts ON exam_attempts.id = exam_attempt_question_results.attempt_id
+                    WHERE exam_attempts.course_id = ?1
+                    GROUP BY exam_attempt_question_results.verdict
+                    "#,
+                )?;
+                let rows = statement
+                    .query_map(params![course_id], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                rows
+            }
+            None => {
+                let mut statement = self.conn.prepare(
+                    r#"
+                    SELECT verdict, COUNT(*)
+                    FROM exam_attempt_question_results
+                    GROUP BY verdict
+                    "#,
+                )?;
+                let rows = statement
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                rows
+            }
+        };
+
+        for (label, count) in rows {
+            if let Some(bucket) = buckets
+                .iter_mut()
+                .find(|bucket| bucket.label.eq_ignore_ascii_case(&label))
+            {
+                bucket.count = count;
+            }
+        }
+        Ok(buckets)
+    }
+
+    fn build_mastery_distribution(
+        &self,
+        course_id: Option<&str>,
+    ) -> Result<Vec<StatisticsCountBucket>> {
+        Ok(vec![
+            StatisticsCountBucket {
+                label: "Active".to_string(),
+                count: self.count_note_mastery_state(course_id, NoteMasteryState::Active)?,
+            },
+            StatisticsCountBucket {
+                label: "Review".to_string(),
+                count: self.count_note_mastery_state(course_id, NoteMasteryState::Review)?,
+            },
+            StatisticsCountBucket {
+                label: "Mastered".to_string(),
+                count: self.count_note_mastery_state(course_id, NoteMasteryState::Mastered)?,
+            },
+        ])
+    }
+
+    fn count_note_mastery_state(
+        &self,
+        course_id: Option<&str>,
+        state: NoteMasteryState,
+    ) -> Result<usize> {
+        match course_id {
+            Some(course_id) => self.conn.query_row(
+                "SELECT COUNT(*) FROM note_mastery_states WHERE course_id = ?1 AND mastery_state = ?2",
+                params![course_id, note_mastery_state_to_str(state)],
+                |row| row.get::<_, i64>(0).map(|value| value as usize),
+            ),
+            None => self.conn.query_row(
+                "SELECT COUNT(*) FROM note_mastery_states WHERE mastery_state = ?1",
+                params![note_mastery_state_to_str(state)],
+                |row| row.get::<_, i64>(0).map(|value| value as usize),
+            ),
+        }
+        .map_err(Into::into)
+    }
+
+    fn try_build_git_analytics(
+        &self,
+        vault_path: &str,
+        courses: &[StoredCourse],
+        scope: StatisticsScope,
+        selected_course: Option<&StoredCourse>,
+    ) -> Result<std::result::Result<Option<GitAnalytics>, String>> {
+        match self.build_git_analytics(vault_path, courses, scope, selected_course) {
+            Ok(value) => Ok(Ok(value)),
+            Err(error) => Ok(Err(error.to_string())),
+        }
+    }
+
+    fn build_git_analytics(
+        &self,
+        vault_path: &str,
+        courses: &[StoredCourse],
+        scope: StatisticsScope,
+        selected_course: Option<&StoredCourse>,
+    ) -> Result<Option<GitAnalytics>> {
+        let repo_root = match self.git_repo_root(vault_path)? {
+            Some(root) => root,
+            None => return Ok(None),
+        };
+        let commits = self.list_git_markdown_commits(&repo_root)?;
+        if commits.is_empty() {
+            return Ok(None);
+        }
+
+        let note_map = self.build_git_note_lookup(courses)?;
+        let filtered = commits
+            .into_iter()
+            .filter_map(|commit| {
+                let paths = commit
+                    .paths
+                    .into_iter()
+                    .filter(|path| path.ends_with(".md"))
+                    .filter(|path| match scope {
+                        StatisticsScope::Course => selected_course
+                            .map(|course| is_path_within_course(path, &course.folder))
+                            .unwrap_or(false),
+                        StatisticsScope::Vault => true,
+                    })
+                    .collect::<Vec<_>>();
+                if paths.is_empty() {
+                    None
+                } else {
+                    Some(GitCommitRecord { paths, ..commit })
+                }
+            })
+            .collect::<Vec<_>>();
+        if filtered.is_empty() {
+            return Ok(None);
+        }
+
+        let commit_timeline = build_git_timeline(&filtered, false);
+        let churn_timeline = build_git_timeline(&filtered, true);
+        let course_activity = build_git_course_activity_rows(&filtered, courses);
+        let top_notes = build_git_note_rows(&filtered, &note_map);
+        let recent_commits = filtered
+            .iter()
+            .rev()
+            .take(8)
+            .map(|commit| GitCommitItem {
+                sha: commit.sha.clone(),
+                summary: commit.summary.clone(),
+                author_name: commit.author_name.clone(),
+                committed_at: commit.committed_at.clone(),
+                changed_notes: commit.paths.len(),
+            })
+            .collect::<Vec<_>>();
+        let recent_threshold = Utc::now() - chrono::Duration::days(30);
+        let recent_commit_count = filtered
+            .iter()
+            .filter(|commit| {
+                DateTime::parse_from_rfc3339(&commit.committed_at)
+                    .map(|timestamp| timestamp.with_timezone(&Utc) >= recent_threshold)
+                    .unwrap_or(false)
+            })
+            .count();
+        let active_days_30 = filtered
+            .iter()
+            .filter_map(|commit| {
+                DateTime::parse_from_rfc3339(&commit.committed_at)
+                    .ok()
+                    .map(|timestamp| timestamp.with_timezone(&Utc))
+            })
+            .filter(|timestamp| *timestamp >= recent_threshold)
+            .map(|timestamp| timestamp.date_naive())
+            .collect::<HashSet<_>>()
+            .len();
+        let summary = GitSummary {
+            repo_root: repo_root.to_string_lossy().to_string(),
+            total_markdown_commits: filtered.len(),
+            total_markdown_file_changes: filtered.iter().map(|commit| commit.paths.len()).sum(),
+            last_commit_at: filtered.last().map(|commit| commit.committed_at.clone()),
+            recent_commit_count,
+            active_days_30,
+        };
+
+        Ok(Some(GitAnalytics {
+            summary,
+            commit_timeline,
+            churn_timeline,
+            course_activity,
+            top_notes,
+            recent_commits,
+        }))
+    }
+
+    fn git_repo_root(&self, vault_path: &str) -> Result<Option<PathBuf>> {
+        let output = Command::new("git")
+            .args(["-C", vault_path, "rev-parse", "--show-toplevel"])
+            .output();
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => return Err(anyhow!("failed to run git: {error}")),
+        };
+        if !output.status.success() {
+            return Ok(None);
+        }
+        let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if root.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(PathBuf::from(root)))
+    }
+
+    fn list_git_markdown_commits(&self, repo_root: &Path) -> Result<Vec<GitCommitRecord>> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo_root)
+            .args([
+                "log",
+                "--date=iso-strict",
+                "--name-only",
+                "--pretty=format:__COD__%n%H%n%aI%n%an%n%s",
+                "--",
+                ".",
+            ])
+            .output()
+            .context("failed to read git history")?;
+        if !output.status.success() {
+            bail!(
+                "git log failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut records = Vec::new();
+        let mut lines = text.lines().peekable();
+        while let Some(line) = lines.next() {
+            if line != "__COD__" {
+                continue;
+            }
+            let sha = lines.next().unwrap_or_default().to_string();
+            let committed_at = lines.next().unwrap_or_default().to_string();
+            let author_name = lines.next().unwrap_or_default().to_string();
+            let summary = lines.next().unwrap_or_default().to_string();
+            let mut paths = Vec::new();
+            while let Some(next) = lines.peek() {
+                if *next == "__COD__" {
+                    break;
+                }
+                let value = normalize_relative_path(lines.next().unwrap_or_default());
+                if value.ends_with(".md") {
+                    paths.push(value);
+                }
+            }
+            records.push(GitCommitRecord {
+                sha,
+                committed_at,
+                author_name,
+                summary,
+                paths,
+            });
+        }
+        Ok(records)
+    }
+
+    fn build_git_note_lookup(
+        &self,
+        courses: &[StoredCourse],
+    ) -> Result<HashMap<String, (String, String, String, String)>> {
+        let mut map = HashMap::new();
+        for course in courses {
+            for note in self.list_notes(&course.id)? {
+                map.insert(
+                    normalize_relative_path(&note.relative_path),
+                    (
+                        note.id,
+                        note.title,
+                        course.id.clone(),
+                        course.name.clone(),
+                    ),
+                );
+            }
+        }
+        Ok(map)
     }
 
     pub fn get_note_details(&self, note_id: &str) -> Result<NoteDetails> {
@@ -2187,12 +2954,17 @@ impl Database {
                 let content = fs::read_to_string(&path)
                     .with_context(|| format!("failed to read {}", path.display()))?;
                 let content_hash = hash_content(&content);
+                let source_modified_at = fs::metadata(&path)
+                    .ok()
+                    .and_then(|metadata| metadata.modified().ok())
+                    .map(system_time_to_rfc3339);
 
                 if existing_hashes
                     .get(&note_id)
                     .map(|existing| existing == &content_hash)
                     .unwrap_or(false)
                 {
+                    self.update_note_source_modified_at(&note_id, source_modified_at.as_deref())?;
                     unchanged_notes += 1;
                     continue;
                 }
@@ -2202,7 +2974,14 @@ impl Database {
                     .and_then(|value| value.to_str())
                     .unwrap_or("Untitled");
                 let parsed = self.prepare_note_for_storage(file_stem, &content)?;
-                self.upsert_note(&course.id, &note_id, &relative_path, &content_hash, parsed)?;
+                self.upsert_note(
+                    &course.id,
+                    &note_id,
+                    &relative_path,
+                    &content_hash,
+                    source_modified_at.as_deref(),
+                    parsed,
+                )?;
                 changed_notes += 1;
             }
 
@@ -2224,6 +3003,7 @@ impl Database {
             "UPDATE app_state SET last_scan_at = ?1, last_note_count = ?2, last_changed_count = ?3, last_removed_count = ?4 WHERE id = 1",
             params![scanned_at, note_count as i64, changed_notes as i64, removed_notes as i64],
         )?;
+        self.append_statistics_snapshots(&courses, &scanned_at)?;
 
         Ok(ScanReport {
             scanned_notes,
@@ -2906,6 +3686,18 @@ impl Database {
         Ok(rows.into_iter().collect())
     }
 
+    fn update_note_source_modified_at(
+        &self,
+        note_id: &str,
+        source_modified_at: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE note_records SET source_modified_at = ?2 WHERE id = ?1",
+            params![note_id, source_modified_at],
+        )?;
+        Ok(())
+    }
+
     fn prepare_note_for_storage(
         &self,
         file_stem: &str,
@@ -2945,21 +3737,23 @@ impl Database {
         note_id: &str,
         relative_path: &str,
         content_hash: &str,
+        source_modified_at: Option<&str>,
         parsed: ParsedStorageNote,
     ) -> Result<()> {
         let now = now_string();
         self.conn.execute(
             r#"
             INSERT INTO note_records (
-              id, course_id, relative_path, title, content_hash, frontmatter, frontmatter_exam_date,
-              excerpt, headings_json, links_json, tags_json, prerequisites_json, concept_count,
-              formula_count, created_at, updated_at
+              id, course_id, relative_path, title, content_hash, source_modified_at, frontmatter,
+              frontmatter_exam_date, excerpt, headings_json, links_json, tags_json,
+              prerequisites_json, concept_count, formula_count, created_at, updated_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)
             ON CONFLICT(id) DO UPDATE SET
               relative_path = excluded.relative_path,
               title = excluded.title,
               content_hash = excluded.content_hash,
+              source_modified_at = excluded.source_modified_at,
               frontmatter = excluded.frontmatter,
               frontmatter_exam_date = excluded.frontmatter_exam_date,
               excerpt = excluded.excerpt,
@@ -2977,6 +3771,7 @@ impl Database {
                 relative_path,
                 parsed.title,
                 content_hash,
+                source_modified_at,
                 parsed.frontmatter_raw,
                 parsed.frontmatter_exam_date,
                 parsed.excerpt,
@@ -3252,7 +4047,7 @@ impl Database {
     fn list_notes(&self, course_id: &str) -> Result<Vec<StoredNote>> {
         let mut statement = self.conn.prepare(
             r#"
-            SELECT id, title, relative_path, content_hash, excerpt, headings_json, links_json, prerequisites_json, frontmatter_exam_date
+            SELECT id, title, relative_path, content_hash, source_modified_at, excerpt, headings_json, links_json, prerequisites_json, frontmatter_exam_date
             FROM note_records
             WHERE course_id = ?1
             ORDER BY title ASC
@@ -3265,11 +4060,12 @@ impl Database {
                     title: row.get(1)?,
                     relative_path: row.get(2)?,
                     content_hash: row.get(3)?,
-                    excerpt: row.get(4)?,
-                    headings: from_json_vec::<String>(&row.get::<_, String>(5)?),
-                    links: from_json_vec::<String>(&row.get::<_, String>(6)?),
-                    prerequisites: from_json_vec::<String>(&row.get::<_, String>(7)?),
-                    frontmatter_exam_date: row.get(8)?,
+                    source_modified_at: row.get(4)?,
+                    excerpt: row.get(5)?,
+                    headings: from_json_vec::<String>(&row.get::<_, String>(6)?),
+                    links: from_json_vec::<String>(&row.get::<_, String>(7)?),
+                    prerequisites: from_json_vec::<String>(&row.get::<_, String>(8)?),
+                    frontmatter_exam_date: row.get(9)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -3967,6 +4763,491 @@ impl Database {
                 row.get::<_, i64>(0).map(|value| value as usize)
             })
             .map_err(Into::into)
+    }
+
+    fn build_course_statistics_overview(&self, course_id: &str) -> Result<StatisticsOverview> {
+        let notes = self.list_notes(course_id)?;
+        let concepts = self.list_concepts(course_id)?;
+        let formulas = self.list_formulas(course_id)?;
+        let edges = self.list_edges(course_id)?;
+        let weak_rows = self.list_weak_suggestions(course_id)?;
+        let flashcard_sets = self.list_flashcard_sets(course_id)?;
+        let revision_runs = self.list_revision_runs(course_id)?;
+        let ai_states = self.list_ai_note_states(course_id)?;
+        let ai_run = self.get_ai_course_run(course_id)?;
+        let coverage = build_coverage(&notes, &concepts, &formulas, &flashcard_sets);
+        let graph = build_graph_stats(&notes, &edges);
+        let weak_note_count = build_weak_notes(&notes, &weak_rows).len();
+        let formula_count = formulas
+            .iter()
+            .map(|(_, _, normalized)| normalized.clone())
+            .collect::<HashSet<_>>()
+            .len();
+        let note_summaries = build_note_summaries(&notes, &edges, &concepts, &formulas, &ai_states);
+        let average_note_strength = if note_summaries.is_empty() {
+            0.0
+        } else {
+            round_percentage(
+                note_summaries.iter().map(|note| note.strength).sum::<f64>()
+                    / note_summaries.len() as f64,
+            )
+        };
+        let notes_with_formulas = formulas
+            .iter()
+            .map(|(note_id, _, _)| note_id.clone())
+            .collect::<HashSet<_>>()
+            .len();
+        let flashcard_summary = build_flashcard_summary(&flashcard_sets);
+        let revision_summary = build_revision_summary(&revision_runs);
+        let ai_summary =
+            build_ai_course_summary(notes.len(), None, &notes, &ai_states, ai_run.as_ref());
+        let (exam_attempt_count, latest_exam_score, average_exam_score) =
+            self.build_exam_score_summary(Some(course_id))?;
+
+        Ok(StatisticsOverview {
+            note_count: notes.len(),
+            total_concepts: coverage.total_concepts,
+            covered_concepts: coverage.covered_concepts,
+            coverage_percentage: coverage.percentage,
+            edge_count: graph.edge_count,
+            strong_links: graph.strong_links,
+            inferred_links: graph.inferred_links,
+            isolated_notes: graph.isolated_notes,
+            weak_note_count,
+            formula_count,
+            notes_with_formulas,
+            average_note_strength,
+            flashcard_set_count: flashcard_summary.set_count,
+            flashcard_total_cards: flashcard_summary.total_cards,
+            revision_run_count: revision_runs.len(),
+            latest_revision_item_count: revision_summary.item_count,
+            ai_ready_notes: ai_summary.ready_notes,
+            ai_pending_notes: ai_summary.pending_notes,
+            ai_failed_notes: ai_summary.failed_notes,
+            ai_stale_notes: ai_summary.stale_notes,
+            ai_missing_notes: ai_summary.missing_notes,
+            exam_attempt_count,
+            latest_exam_score,
+            average_exam_score,
+        })
+    }
+
+    fn build_vault_statistics_overview(
+        &self,
+        courses: &[StoredCourse],
+    ) -> Result<StatisticsOverview> {
+        let mut combined = StatisticsOverview {
+            note_count: 0,
+            total_concepts: 0,
+            covered_concepts: 0,
+            coverage_percentage: 0.0,
+            edge_count: 0,
+            strong_links: 0,
+            inferred_links: 0,
+            isolated_notes: 0,
+            weak_note_count: 0,
+            formula_count: 0,
+            notes_with_formulas: 0,
+            average_note_strength: 0.0,
+            flashcard_set_count: 0,
+            flashcard_total_cards: 0,
+            revision_run_count: 0,
+            latest_revision_item_count: 0,
+            ai_ready_notes: 0,
+            ai_pending_notes: 0,
+            ai_failed_notes: 0,
+            ai_stale_notes: 0,
+            ai_missing_notes: 0,
+            exam_attempt_count: 0,
+            latest_exam_score: None,
+            average_exam_score: None,
+        };
+
+        for course in courses {
+            let overview = self.build_course_statistics_overview(&course.id)?;
+            combined.note_count += overview.note_count;
+            combined.total_concepts += overview.total_concepts;
+            combined.covered_concepts += overview.covered_concepts;
+            combined.edge_count += overview.edge_count;
+            combined.strong_links += overview.strong_links;
+            combined.inferred_links += overview.inferred_links;
+            combined.isolated_notes += overview.isolated_notes;
+            combined.weak_note_count += overview.weak_note_count;
+            combined.formula_count += overview.formula_count;
+            combined.notes_with_formulas += overview.notes_with_formulas;
+            combined.flashcard_set_count += overview.flashcard_set_count;
+            combined.flashcard_total_cards += overview.flashcard_total_cards;
+            combined.revision_run_count += overview.revision_run_count;
+            combined.latest_revision_item_count += overview.latest_revision_item_count;
+            combined.ai_ready_notes += overview.ai_ready_notes;
+            combined.ai_pending_notes += overview.ai_pending_notes;
+            combined.ai_failed_notes += overview.ai_failed_notes;
+            combined.ai_stale_notes += overview.ai_stale_notes;
+            combined.ai_missing_notes += overview.ai_missing_notes;
+            combined.exam_attempt_count += overview.exam_attempt_count;
+        }
+
+        combined.coverage_percentage = if combined.total_concepts == 0 {
+            0.0
+        } else {
+            round_percentage(
+                (combined.covered_concepts as f64 / combined.total_concepts as f64) * 100.0,
+            )
+        };
+        combined.average_note_strength = if combined.note_count == 0 {
+            0.0
+        } else {
+            round_percentage(
+                courses
+                    .iter()
+                    .map(|course| self.build_course_statistics_overview(&course.id))
+                    .collect::<Result<Vec<_>>>()?
+                    .iter()
+                    .map(|overview| overview.average_note_strength * overview.note_count as f64)
+                    .sum::<f64>()
+                    / combined.note_count as f64,
+            )
+        };
+
+        let (_, latest_exam_score, average_exam_score) = self.build_exam_score_summary(None)?;
+        combined.latest_exam_score = latest_exam_score;
+        combined.average_exam_score = average_exam_score;
+
+        Ok(combined)
+    }
+
+    fn build_course_statistics_rows(
+        &self,
+        courses: &[StoredCourse],
+    ) -> Result<Vec<CourseStatisticsRow>> {
+        let mut rows = courses
+            .iter()
+            .map(|course| {
+                let overview = self.build_course_statistics_overview(&course.id)?;
+                Ok(CourseStatisticsRow {
+                    course_id: course.id.clone(),
+                    course_name: course.name.clone(),
+                    note_count: overview.note_count,
+                    coverage_percentage: overview.coverage_percentage,
+                    edge_count: overview.edge_count,
+                    weak_note_count: overview.weak_note_count,
+                    formula_count: overview.formula_count,
+                    average_note_strength: overview.average_note_strength,
+                    flashcard_total_cards: overview.flashcard_total_cards,
+                    revision_run_count: overview.revision_run_count,
+                    ai_ready_notes: overview.ai_ready_notes,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        rows.sort_by(|left, right| left.course_name.cmp(&right.course_name));
+        Ok(rows)
+    }
+
+    fn build_exam_score_summary(
+        &self,
+        course_id: Option<&str>,
+    ) -> Result<(usize, Option<f64>, Option<f64>)> {
+        let attempt_count = match course_id {
+            Some(course_id) => self.conn.query_row(
+                "SELECT COUNT(*) FROM exam_attempts WHERE course_id = ?1",
+                params![course_id],
+                |row| row.get::<_, i64>(0).map(|value| value as usize),
+            )?,
+            None => self.conn.query_row("SELECT COUNT(*) FROM exam_attempts", [], |row| {
+                row.get::<_, i64>(0).map(|value| value as usize)
+            })?,
+        };
+
+        let latest_exam_score = match course_id {
+            Some(course_id) => self
+                .conn
+                .query_row(
+                    "SELECT score_percent FROM exam_attempts WHERE course_id = ?1 ORDER BY submitted_at DESC LIMIT 1",
+                    params![course_id],
+                    |row| row.get::<_, f64>(0),
+                )
+                .optional()?,
+            None => self
+                .conn
+                .query_row(
+                    "SELECT score_percent FROM exam_attempts ORDER BY submitted_at DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, f64>(0),
+                )
+                .optional()?,
+        };
+
+        let average_exam_score = match course_id {
+            Some(course_id) => self
+                .conn
+                .query_row(
+                    "SELECT AVG(score_percent) FROM exam_attempts WHERE course_id = ?1",
+                    params![course_id],
+                    |row| row.get::<_, Option<f64>>(0),
+                )?,
+            None => self.conn.query_row("SELECT AVG(score_percent) FROM exam_attempts", [], |row| {
+                row.get::<_, Option<f64>>(0)
+            })?,
+        }
+        .map(round_percentage);
+
+        Ok((attempt_count, latest_exam_score.map(round_percentage), average_exam_score))
+    }
+
+    fn list_statistics_history(
+        &self,
+        scope: StatisticsScope,
+        course_id: Option<&str>,
+    ) -> Result<Vec<StatisticsSnapshotPoint>> {
+        let scope_value = statistics_scope_to_str(scope);
+        let mut statement = match scope {
+            StatisticsScope::Course => self.conn.prepare(
+                r#"
+                SELECT captured_at, note_count, total_concepts, covered_concepts, coverage_percentage,
+                       edge_count, strong_links, inferred_links, isolated_notes, weak_note_count,
+                       formula_count, notes_with_formulas, average_note_strength,
+                       flashcard_set_count, flashcard_total_cards, revision_run_count,
+                       latest_revision_item_count, ai_ready_notes, ai_pending_notes,
+                       ai_failed_notes, ai_stale_notes, ai_missing_notes,
+                       exam_attempt_count, latest_exam_score, average_exam_score
+                FROM stats_snapshots
+                WHERE scope = ?1 AND course_id = ?2
+                ORDER BY captured_at ASC
+                "#,
+            )?,
+            StatisticsScope::Vault => self.conn.prepare(
+                r#"
+                SELECT captured_at, note_count, total_concepts, covered_concepts, coverage_percentage,
+                       edge_count, strong_links, inferred_links, isolated_notes, weak_note_count,
+                       formula_count, notes_with_formulas, average_note_strength,
+                       flashcard_set_count, flashcard_total_cards, revision_run_count,
+                       latest_revision_item_count, ai_ready_notes, ai_pending_notes,
+                       ai_failed_notes, ai_stale_notes, ai_missing_notes,
+                       exam_attempt_count, latest_exam_score, average_exam_score
+                FROM stats_snapshots
+                WHERE scope = ?1 AND course_id IS NULL
+                ORDER BY captured_at ASC
+                "#,
+            )?,
+        };
+
+        let rows = match scope {
+            StatisticsScope::Course => statement
+                .query_map(
+                    params![scope_value, course_id.ok_or_else(|| anyhow!("course statistics require a course"))?],
+                    read_statistics_snapshot_row,
+                )?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            StatisticsScope::Vault => statement
+                .query_map(params![scope_value], read_statistics_snapshot_row)?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        };
+        Ok(rows)
+    }
+
+    fn list_statistics_exam_points(
+        &self,
+        course_id: Option<&str>,
+    ) -> Result<Vec<StatisticsExamPoint>> {
+        let mut statement = match course_id {
+            Some(_) => self.conn.prepare(
+                r#"
+                SELECT exam_attempts.submitted_at, exam_attempts.exam_id, exams.title,
+                       exam_attempts.score_percent, course_configs.id, course_configs.name
+                FROM exam_attempts
+                INNER JOIN exams ON exams.id = exam_attempts.exam_id
+                INNER JOIN course_configs ON course_configs.id = exam_attempts.course_id
+                WHERE exam_attempts.course_id = ?1
+                ORDER BY exam_attempts.submitted_at ASC
+                "#,
+            )?,
+            None => self.conn.prepare(
+                r#"
+                SELECT exam_attempts.submitted_at, exam_attempts.exam_id, exams.title,
+                       exam_attempts.score_percent, course_configs.id, course_configs.name
+                FROM exam_attempts
+                INNER JOIN exams ON exams.id = exam_attempts.exam_id
+                INNER JOIN course_configs ON course_configs.id = exam_attempts.course_id
+                ORDER BY exam_attempts.submitted_at ASC
+                "#,
+            )?,
+        };
+
+        let rows = match course_id {
+            Some(course_id) => statement
+                .query_map(params![course_id], |row| {
+                    Ok(StatisticsExamPoint {
+                        submitted_at: row.get(0)?,
+                        exam_id: row.get(1)?,
+                        exam_title: row.get(2)?,
+                        score_percent: round_percentage(row.get(3)?),
+                        course_id: Some(row.get(4)?),
+                        course_name: Some(row.get(5)?),
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            None => statement
+                .query_map([], |row| {
+                    Ok(StatisticsExamPoint {
+                        submitted_at: row.get(0)?,
+                        exam_id: row.get(1)?,
+                        exam_title: row.get(2)?,
+                        score_percent: round_percentage(row.get(3)?),
+                        course_id: Some(row.get(4)?),
+                        course_name: Some(row.get(5)?),
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        };
+        Ok(rows)
+    }
+
+    fn build_activity_buckets(&self, course_id: Option<&str>) -> Result<Vec<VaultActivityBucket>> {
+        let total_notes = match course_id {
+            Some(course_id) => self.conn.query_row(
+                "SELECT COUNT(*) FROM note_records WHERE course_id = ?1",
+                params![course_id],
+                |row| row.get::<_, i64>(0).map(|value| value as usize),
+            )?,
+            None => self.conn.query_row("SELECT COUNT(*) FROM note_records", [], |row| {
+                row.get::<_, i64>(0).map(|value| value as usize)
+            })?,
+        };
+
+        let mut statement = match course_id {
+            Some(_) => self
+                .conn
+                .prepare("SELECT source_modified_at FROM note_records WHERE course_id = ?1")?,
+            None => self.conn.prepare("SELECT source_modified_at FROM note_records")?,
+        };
+
+        let modified_rows = match course_id {
+            Some(course_id) => statement
+                .query_map(params![course_id], |row| row.get::<_, Option<String>>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            None => statement
+                .query_map([], |row| row.get::<_, Option<String>>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        };
+
+        let mut counts = [0usize; 5];
+        let now = Utc::now();
+
+        for value in modified_rows {
+            match value {
+                Some(value) => match DateTime::parse_from_rfc3339(&value) {
+                    Ok(parsed) => {
+                        let age_days = (now - parsed.with_timezone(&Utc)).num_days().max(0);
+                        match age_days {
+                            0..=7 => counts[0] += 1,
+                            8..=30 => counts[1] += 1,
+                            31..=90 => counts[2] += 1,
+                            _ => counts[3] += 1,
+                        }
+                    }
+                    Err(_) => counts[4] += 1,
+                },
+                None => counts[4] += 1,
+            }
+        }
+
+        let known_notes = counts[..4].iter().sum::<usize>() + counts[4];
+        if total_notes > known_notes {
+            counts[4] += total_notes - known_notes;
+        }
+
+        Ok(vec![
+            VaultActivityBucket {
+                label: "0-7 days".to_string(),
+                note_count: counts[0],
+            },
+            VaultActivityBucket {
+                label: "8-30 days".to_string(),
+                note_count: counts[1],
+            },
+            VaultActivityBucket {
+                label: "31-90 days".to_string(),
+                note_count: counts[2],
+            },
+            VaultActivityBucket {
+                label: "90+ days".to_string(),
+                note_count: counts[3],
+            },
+            VaultActivityBucket {
+                label: "Unknown".to_string(),
+                note_count: counts[4],
+            },
+        ])
+    }
+
+    fn append_statistics_snapshots(&self, courses: &[StoredCourse], captured_at: &str) -> Result<()> {
+        for course in courses {
+            let overview = self.build_course_statistics_overview(&course.id)?;
+            self.insert_statistics_snapshot(
+                StatisticsScope::Course,
+                Some(&course.id),
+                captured_at,
+                &overview,
+            )?;
+        }
+
+        let vault_overview = self.build_vault_statistics_overview(courses)?;
+        self.insert_statistics_snapshot(StatisticsScope::Vault, None, captured_at, &vault_overview)?;
+        Ok(())
+    }
+
+    fn insert_statistics_snapshot(
+        &self,
+        scope: StatisticsScope,
+        course_id: Option<&str>,
+        captured_at: &str,
+        overview: &StatisticsOverview,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO stats_snapshots (
+              id, scope, course_id, captured_at, note_count, total_concepts, covered_concepts,
+              coverage_percentage, edge_count, strong_links, inferred_links, isolated_notes,
+              weak_note_count, formula_count, notes_with_formulas, average_note_strength,
+              flashcard_set_count, flashcard_total_cards, revision_run_count,
+              latest_revision_item_count, ai_ready_notes, ai_pending_notes, ai_failed_notes,
+              ai_stale_notes, ai_missing_notes, exam_attempt_count, latest_exam_score,
+              average_exam_score
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)
+            "#,
+            params![
+                Uuid::new_v4().to_string(),
+                statistics_scope_to_str(scope),
+                course_id,
+                captured_at,
+                overview.note_count as i64,
+                overview.total_concepts as i64,
+                overview.covered_concepts as i64,
+                overview.coverage_percentage,
+                overview.edge_count as i64,
+                overview.strong_links as i64,
+                overview.inferred_links as i64,
+                overview.isolated_notes as i64,
+                overview.weak_note_count as i64,
+                overview.formula_count as i64,
+                overview.notes_with_formulas as i64,
+                overview.average_note_strength,
+                overview.flashcard_set_count as i64,
+                overview.flashcard_total_cards as i64,
+                overview.revision_run_count as i64,
+                overview.latest_revision_item_count as i64,
+                overview.ai_ready_notes as i64,
+                overview.ai_pending_notes as i64,
+                overview.ai_failed_notes as i64,
+                overview.ai_stale_notes as i64,
+                overview.ai_missing_notes as i64,
+                overview.exam_attempt_count as i64,
+                overview.latest_exam_score,
+                overview.average_exam_score,
+            ],
+        )?;
+        Ok(())
     }
 
     fn compute_coverage_for_course(&self, course_id: &str) -> Result<CoverageStats> {
@@ -5219,6 +6500,381 @@ fn build_revision_summary(runs: &[StoredRevisionRun]) -> RevisionSummary {
     }
 }
 
+fn aggregate_flashcard_summary(course_bundles: &[CourseStatisticsBundle]) -> FlashcardSummary {
+    let total_cards = course_bundles
+        .iter()
+        .map(|bundle| bundle.flashcards.total_cards)
+        .sum();
+    let set_count = course_bundles
+        .iter()
+        .map(|bundle| bundle.flashcards.set_count)
+        .sum();
+    let latest = course_bundles
+        .iter()
+        .filter_map(|bundle| {
+            bundle
+                .flashcards
+                .last_generated_at
+                .as_ref()
+                .map(|created_at| (created_at.clone(), bundle.flashcards.export_path.clone()))
+        })
+        .max_by(|left, right| left.0.cmp(&right.0));
+    FlashcardSummary {
+        set_count,
+        total_cards,
+        last_generated_at: latest.as_ref().map(|value| value.0.clone()),
+        export_path: latest.and_then(|value| value.1),
+    }
+}
+
+fn aggregate_revision_summary(course_bundles: &[CourseStatisticsBundle]) -> RevisionSummary {
+    let total_items = course_bundles
+        .iter()
+        .map(|bundle| bundle.revision.item_count)
+        .sum::<usize>();
+    let latest = course_bundles
+        .iter()
+        .filter_map(|bundle| {
+            bundle
+                .revision
+                .last_generated_at
+                .as_ref()
+                .map(|created_at| (created_at.clone(), bundle.revision.note_path.clone(), bundle.revision.item_count))
+        })
+        .max_by(|left, right| left.0.cmp(&right.0));
+    RevisionSummary {
+        last_generated_at: latest.as_ref().map(|value| value.0.clone()),
+        note_path: latest.as_ref().and_then(|value| value.1.clone()),
+        item_count: latest.map(|value| value.2).unwrap_or(total_items),
+    }
+}
+
+fn build_attempt_history(exam_history: &[StatisticsExamPoint]) -> Vec<StatisticsValuePoint> {
+    let mut grouped = BTreeMap::<String, usize>::new();
+    for point in exam_history {
+        let label = point.submitted_at.get(0..10).unwrap_or(&point.submitted_at).to_string();
+        *grouped.entry(label).or_insert(0) += 1;
+    }
+    grouped
+        .into_iter()
+        .map(|(label, value)| StatisticsValuePoint {
+            label,
+            value: value as f64,
+        })
+        .collect()
+}
+
+fn build_formula_density_buckets(note_rows: &[StatisticsNoteRow]) -> Vec<StatisticsCountBucket> {
+    let mut counts = [0usize; 4];
+    for note in note_rows {
+        match note.formula_count {
+            0 => counts[0] += 1,
+            1 => counts[1] += 1,
+            2 => counts[2] += 1,
+            _ => counts[3] += 1,
+        }
+    }
+    vec![
+        StatisticsCountBucket {
+            label: "0 formulas".to_string(),
+            count: counts[0],
+        },
+        StatisticsCountBucket {
+            label: "1 formula".to_string(),
+            count: counts[1],
+        },
+        StatisticsCountBucket {
+            label: "2 formulas".to_string(),
+            count: counts[2],
+        },
+        StatisticsCountBucket {
+            label: "3+ formulas".to_string(),
+            count: counts[3],
+        },
+    ]
+}
+
+fn build_strength_buckets(note_rows: &[StatisticsNoteRow]) -> Vec<StatisticsCountBucket> {
+    let mut counts = [0usize; 4];
+    for note in note_rows {
+        match note.strength {
+            value if value < 1.5 => counts[0] += 1,
+            value if value < 3.0 => counts[1] += 1,
+            value if value < 5.0 => counts[2] += 1,
+            _ => counts[3] += 1,
+        }
+    }
+    vec![
+        StatisticsCountBucket {
+            label: "Fragile".to_string(),
+            count: counts[0],
+        },
+        StatisticsCountBucket {
+            label: "Developing".to_string(),
+            count: counts[1],
+        },
+        StatisticsCountBucket {
+            label: "Stable".to_string(),
+            count: counts[2],
+        },
+        StatisticsCountBucket {
+            label: "Dense".to_string(),
+            count: counts[3],
+        },
+    ]
+}
+
+fn sort_note_rows_by_strength(note_rows: &[StatisticsNoteRow], descending: bool) -> Vec<StatisticsNoteRow> {
+    let mut rows = note_rows.to_vec();
+    rows.sort_by(|left, right| {
+        if descending {
+            right.strength.total_cmp(&left.strength)
+        } else {
+            left.strength.total_cmp(&right.strength)
+        }
+        .then_with(|| left.title.cmp(&right.title))
+    });
+    rows.into_iter().take(8).collect()
+}
+
+fn sort_note_rows_by_links(note_rows: &[StatisticsNoteRow]) -> Vec<StatisticsNoteRow> {
+    let mut rows = note_rows.to_vec();
+    rows.sort_by(|left, right| {
+        right
+            .link_count
+            .cmp(&left.link_count)
+            .then_with(|| right.strength.total_cmp(&left.strength))
+            .then_with(|| left.title.cmp(&right.title))
+    });
+    rows.into_iter().take(8).collect()
+}
+
+fn sort_note_rows_by_modified_at(note_rows: &[StatisticsNoteRow]) -> Vec<StatisticsNoteRow> {
+    let mut rows = note_rows.to_vec();
+    rows.sort_by(|left, right| left.modified_at.cmp(&right.modified_at).then_with(|| left.title.cmp(&right.title)));
+    rows.into_iter().take(8).collect()
+}
+
+fn recent_exam_points(exam_history: &[StatisticsExamPoint]) -> Vec<StatisticsExamPoint> {
+    let mut rows = exam_history.to_vec();
+    rows.sort_by(|left, right| right.submitted_at.cmp(&left.submitted_at));
+    rows.into_iter().take(8).collect()
+}
+
+fn weakest_exam_points(exam_history: &[StatisticsExamPoint]) -> Vec<StatisticsExamPoint> {
+    let mut rows = exam_history.to_vec();
+    rows.sort_by(|left, right| {
+        left.score_percent
+            .total_cmp(&right.score_percent)
+            .then_with(|| right.submitted_at.cmp(&left.submitted_at))
+    });
+    rows.into_iter().take(8).collect()
+}
+
+fn build_vault_activity_summary(
+    activity_buckets: &[VaultActivityBucket],
+    note_rows: &[StatisticsNoteRow],
+) -> VaultActivitySummary {
+    let recent_notes = activity_buckets
+        .iter()
+        .find(|bucket| bucket.label == "0-7 days")
+        .map(|bucket| bucket.note_count)
+        .unwrap_or(0);
+    let stale_notes = activity_buckets
+        .iter()
+        .find(|bucket| bucket.label == "90+ days")
+        .map(|bucket| bucket.note_count)
+        .unwrap_or(0);
+    let unknown_notes = activity_buckets
+        .iter()
+        .find(|bucket| bucket.label == "Unknown")
+        .map(|bucket| bucket.note_count)
+        .unwrap_or(0);
+    VaultActivitySummary {
+        total_notes: note_rows.len(),
+        recent_notes,
+        stale_notes,
+        unknown_notes,
+        most_recent_modified_at: note_rows.iter().filter_map(|note| note.modified_at.clone()).max(),
+    }
+}
+
+fn build_overview_highlights(
+    course_rows: &[CourseStatisticsRow],
+    git: Option<&GitAnalytics>,
+) -> Vec<StatisticsHighlight> {
+    let mut highlights = Vec::new();
+    if let Some(best) = course_rows
+        .iter()
+        .max_by(|left, right| left.coverage_percentage.total_cmp(&right.coverage_percentage))
+    {
+        highlights.push(StatisticsHighlight {
+            label: "Strongest coverage".to_string(),
+            value: format!("{} {:.1}%", best.course_name, best.coverage_percentage),
+            tone: "success".to_string(),
+        });
+    }
+    if let Some(weakest) = course_rows.iter().max_by_key(|row| row.weak_note_count) {
+        highlights.push(StatisticsHighlight {
+            label: "Most fragile course".to_string(),
+            value: format!("{} {} weak notes", weakest.course_name, weakest.weak_note_count),
+            tone: "warning".to_string(),
+        });
+    }
+    if let Some(active) = git.and_then(|value| value.course_activity.first()) {
+        highlights.push(StatisticsHighlight {
+            label: "Most edited course".to_string(),
+            value: format!("{} {} commits", active.course_name, active.commit_count),
+            tone: "accent".to_string(),
+        });
+    }
+    highlights
+}
+
+fn is_stale_modified_at(value: Option<&str>) -> bool {
+    let Some(value) = value else {
+        return true;
+    };
+    DateTime::parse_from_rfc3339(value)
+        .map(|parsed| (Utc::now() - parsed.with_timezone(&Utc)).num_days() > 90)
+        .unwrap_or(true)
+}
+
+fn build_git_timeline(commits: &[GitCommitRecord], count_paths: bool) -> Vec<GitTimelinePoint> {
+    let mut grouped = BTreeMap::<String, (usize, usize)>::new();
+    for commit in commits {
+        let bucket = commit.committed_at.get(0..7).unwrap_or(&commit.committed_at).to_string();
+        let entry = grouped.entry(bucket).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += if count_paths {
+            commit.paths.len()
+        } else {
+            commit.paths.iter().collect::<HashSet<_>>().len()
+        };
+    }
+    grouped
+        .into_iter()
+        .map(|(bucket, (commit_count, changed_notes))| GitTimelinePoint {
+            bucket,
+            commit_count,
+            changed_notes,
+        })
+        .collect()
+}
+
+fn build_git_course_activity_rows(
+    commits: &[GitCommitRecord],
+    courses: &[StoredCourse],
+) -> Vec<GitCourseActivityRow> {
+    let mut map = HashMap::<String, GitCourseActivityRow>::new();
+    for course in courses {
+        map.insert(
+            course.id.clone(),
+            GitCourseActivityRow {
+                course_id: Some(course.id.clone()),
+                course_name: course.name.clone(),
+                folder: course.folder.clone(),
+                commit_count: 0,
+                changed_notes: 0,
+                last_commit_at: None,
+            },
+        );
+    }
+    for commit in commits {
+        for course in courses {
+            let changed_notes = commit
+                .paths
+                .iter()
+                .filter(|path| is_path_within_course(path, &course.folder))
+                .count();
+            if changed_notes == 0 {
+                continue;
+            }
+            if let Some(row) = map.get_mut(&course.id) {
+                row.commit_count += 1;
+                row.changed_notes += changed_notes;
+                if row
+                    .last_commit_at
+                    .as_ref()
+                    .map(|value| value < &commit.committed_at)
+                    .unwrap_or(true)
+                {
+                    row.last_commit_at = Some(commit.committed_at.clone());
+                }
+            }
+        }
+    }
+    let mut rows = map.into_values().filter(|row| row.commit_count > 0).collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .commit_count
+            .cmp(&left.commit_count)
+            .then_with(|| right.changed_notes.cmp(&left.changed_notes))
+            .then_with(|| left.course_name.cmp(&right.course_name))
+    });
+    rows
+}
+
+fn build_git_note_rows(
+    commits: &[GitCommitRecord],
+    note_map: &HashMap<String, (String, String, String, String)>,
+) -> Vec<GitNoteActivityRow> {
+    let mut counts = HashMap::<String, (usize, Option<String>)>::new();
+    for commit in commits {
+        for path in &commit.paths {
+            let entry = counts.entry(path.clone()).or_insert((0, None));
+            entry.0 += 1;
+            if entry
+                .1
+                .as_ref()
+                .map(|value| value < &commit.committed_at)
+                .unwrap_or(true)
+            {
+                entry.1 = Some(commit.committed_at.clone());
+            }
+        }
+    }
+    let mut rows = counts
+        .into_iter()
+        .map(|(path, (change_count, last_commit_at))| {
+            let mapped = note_map.get(&path);
+            GitNoteActivityRow {
+                note_id: mapped.map(|value| value.0.clone()),
+                title: mapped
+                    .map(|value| value.1.clone())
+                    .unwrap_or_else(|| {
+                        Path::new(&path)
+                            .file_stem()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("Note")
+                            .to_string()
+                    }),
+                relative_path: path,
+                course_id: mapped.map(|value| value.2.clone()),
+                course_name: mapped.map(|value| value.3.clone()),
+                change_count,
+                last_commit_at,
+            }
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .change_count
+            .cmp(&left.change_count)
+            .then_with(|| right.last_commit_at.cmp(&left.last_commit_at))
+            .then_with(|| left.title.cmp(&right.title))
+    });
+    rows.truncate(10);
+    rows
+}
+
+fn is_path_within_course(path: &str, folder: &str) -> bool {
+    let normalized_path = normalize_relative_path(path);
+    let normalized_folder = normalize_relative_path(folder);
+    normalized_path == normalized_folder
+        || normalized_path.starts_with(&format!("{normalized_folder}/"))
+}
+
 fn build_note_summaries(
     notes: &[StoredNote],
     edges: &[StoredEdge],
@@ -5653,6 +7309,11 @@ fn now_string() -> String {
     Utc::now().to_rfc3339()
 }
 
+fn system_time_to_rfc3339(value: SystemTime) -> String {
+    let value: DateTime<Utc> = value.into();
+    value.to_rfc3339()
+}
+
 fn file_stamp() -> String {
     Utc::now().format("%Y%m%d-%H%M%S").to_string()
 }
@@ -5858,6 +7519,45 @@ fn round_percentage(value: f64) -> f64 {
     (value * 10.0).round() / 10.0
 }
 
+fn statistics_scope_to_str(scope: StatisticsScope) -> &'static str {
+    match scope {
+        StatisticsScope::Course => "course",
+        StatisticsScope::Vault => "vault",
+    }
+}
+
+fn read_statistics_snapshot_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<StatisticsSnapshotPoint> {
+    Ok(StatisticsSnapshotPoint {
+        captured_at: row.get(0)?,
+        note_count: row.get::<_, i64>(1)? as usize,
+        total_concepts: row.get::<_, i64>(2)? as usize,
+        covered_concepts: row.get::<_, i64>(3)? as usize,
+        coverage_percentage: row.get(4)?,
+        edge_count: row.get::<_, i64>(5)? as usize,
+        strong_links: row.get::<_, i64>(6)? as usize,
+        inferred_links: row.get::<_, i64>(7)? as usize,
+        isolated_notes: row.get::<_, i64>(8)? as usize,
+        weak_note_count: row.get::<_, i64>(9)? as usize,
+        formula_count: row.get::<_, i64>(10)? as usize,
+        notes_with_formulas: row.get::<_, i64>(11)? as usize,
+        average_note_strength: row.get(12)?,
+        flashcard_set_count: row.get::<_, i64>(13)? as usize,
+        flashcard_total_cards: row.get::<_, i64>(14)? as usize,
+        revision_run_count: row.get::<_, i64>(15)? as usize,
+        latest_revision_item_count: row.get::<_, i64>(16)? as usize,
+        ai_ready_notes: row.get::<_, i64>(17)? as usize,
+        ai_pending_notes: row.get::<_, i64>(18)? as usize,
+        ai_failed_notes: row.get::<_, i64>(19)? as usize,
+        ai_stale_notes: row.get::<_, i64>(20)? as usize,
+        ai_missing_notes: row.get::<_, i64>(21)? as usize,
+        exam_attempt_count: row.get::<_, i64>(22)? as usize,
+        latest_exam_score: row.get(23)?,
+        average_exam_score: row.get(24)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -5870,7 +7570,7 @@ mod tests {
         AiSettingsInput, ApplyExamReviewActionsRequest, ChatScope, CourseConfigInput,
         CreateChatThreadRequest, ExamBuilderInput, ExamDifficulty, ExamPreset, ExamReviewAction,
         ExamSubmissionRequest, FlashcardGenerationRequest, GenerateFormulaBriefRequest,
-        NoteMasteryState, RevisionNoteRequest, SendChatMessageRequest,
+        NoteMasteryState, RevisionNoteRequest, SendChatMessageRequest, StatisticsScope,
     };
 
     #[test]
@@ -5949,6 +7649,152 @@ mod tests {
             })
             .expect("revision");
         assert!(PathBuf::from(revision.note_path).exists());
+    }
+
+    #[test]
+    fn statistics_snapshots_and_source_metadata_persist() {
+        let temp = tempdir().expect("temp dir");
+        let vault_dir = temp.path().join("vault");
+        let course_dir = vault_dir.join("math");
+        fs::create_dir_all(&course_dir).expect("course dir");
+        fs::write(course_dir.join("limits.md"), "# Limits\n\nScan me.\n").expect("write note");
+
+        let db_path = temp.path().join("exam-os.sqlite");
+        let database = Database::open(&db_path).expect("database");
+        database
+            .connect_vault(vault_dir.to_string_lossy().as_ref())
+            .expect("connect vault");
+        let course_id = database
+            .save_course_config(CourseConfigInput {
+                id: None,
+                name: "Math".to_string(),
+                folder: "math".to_string(),
+                exam_date: None,
+                revision_folder: None,
+                flashcards_folder: None,
+            })
+            .expect("save course");
+
+        database.run_scan().expect("first scan");
+        fs::write(course_dir.join("limits.md"), "# Limits\n\nScan me twice.\n").expect("rewrite note");
+        database.run_scan().expect("second scan");
+
+        let source_modified_at = database
+            .conn
+            .query_row(
+                "SELECT source_modified_at FROM note_records WHERE course_id = ?1 LIMIT 1",
+                [course_id.as_str()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .expect("source modified timestamp");
+        assert!(source_modified_at.is_some());
+
+        let course_stats = database
+            .get_statistics(StatisticsScope::Course, Some(course_id.clone()))
+            .expect("course stats")
+            .expect("course stats present");
+        assert_eq!(course_stats.overview.history.len(), 2);
+        assert_eq!(course_stats.overview.summary.note_count, 1);
+        assert_eq!(
+            course_stats
+                .vault_activity
+                .activity_buckets
+                .iter()
+                .map(|bucket| bucket.note_count)
+                .sum::<usize>(),
+            1
+        );
+
+        let vault_stats = database
+            .get_statistics(StatisticsScope::Vault, None)
+            .expect("vault stats")
+            .expect("vault stats present");
+        assert_eq!(vault_stats.overview.history.len(), 2);
+        assert_eq!(vault_stats.overview.course_rows.len(), 1);
+    }
+
+    #[test]
+    fn vault_statistics_aggregate_multiple_courses() {
+        let temp = tempdir().expect("temp dir");
+        let (math_id, physics_id) = setup_formula_chat_vault(temp.path());
+        let db_path = temp.path().join("exam-os.sqlite");
+        let database = Database::open(&db_path).expect("database");
+        database
+            .connect_vault(temp.path().join("vault").to_string_lossy().as_ref())
+            .expect("connect vault");
+        database
+            .save_course_config(CourseConfigInput {
+                id: Some(math_id.clone()),
+                name: "Math".to_string(),
+                folder: "math".to_string(),
+                exam_date: None,
+                revision_folder: None,
+                flashcards_folder: None,
+            })
+            .expect("save math");
+        database
+            .save_course_config(CourseConfigInput {
+                id: Some(physics_id.clone()),
+                name: "Physics".to_string(),
+                folder: "physics".to_string(),
+                exam_date: None,
+                revision_folder: None,
+                flashcards_folder: None,
+            })
+            .expect("save physics");
+
+        database.run_scan().expect("scan");
+
+        let math_stats = database
+            .get_statistics(StatisticsScope::Course, Some(math_id))
+            .expect("math stats")
+            .expect("math stats present");
+        let physics_stats = database
+            .get_statistics(StatisticsScope::Course, Some(physics_id))
+            .expect("physics stats")
+            .expect("physics stats present");
+        let vault_stats = database
+            .get_statistics(StatisticsScope::Vault, None)
+            .expect("vault stats")
+            .expect("vault stats present");
+
+        assert_eq!(vault_stats.overview.course_rows.len(), 2);
+        assert_eq!(
+            vault_stats.overview.summary.note_count,
+            math_stats.overview.summary.note_count + physics_stats.overview.summary.note_count
+        );
+        assert_eq!(vault_stats.overview.history.len(), 1);
+    }
+
+    #[test]
+    fn statistics_fall_back_cleanly_without_git_repo() {
+        let temp = tempdir().expect("temp dir");
+        let (course_id, _) = setup_formula_chat_vault(temp.path());
+        let db_path = temp.path().join("exam-os.sqlite");
+        let database = Database::open(&db_path).expect("database");
+        database
+            .connect_vault(temp.path().join("vault").to_string_lossy().as_ref())
+            .expect("connect vault");
+        database
+            .save_course_config(CourseConfigInput {
+                id: Some(course_id),
+                name: "Math".to_string(),
+                folder: "math".to_string(),
+                exam_date: None,
+                revision_folder: None,
+                flashcards_folder: None,
+            })
+            .expect("save course");
+        database.run_scan().expect("scan");
+
+        let stats = database
+            .get_statistics(StatisticsScope::Vault, None)
+            .expect("stats")
+            .expect("stats present");
+
+        assert!(!stats.git_available);
+        assert!(stats.git.is_none());
+        assert!(!stats.vault_activity.activity_buckets.is_empty());
     }
 
     #[test]

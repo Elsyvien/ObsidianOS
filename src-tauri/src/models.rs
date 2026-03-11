@@ -628,6 +628,367 @@ pub struct DashboardData {
     pub ai: AiCourseSummary,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum StatisticsScope {
+    Course,
+    Vault,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsOverview {
+    pub note_count: usize,
+    pub total_concepts: usize,
+    pub covered_concepts: usize,
+    pub coverage_percentage: f64,
+    pub edge_count: usize,
+    pub strong_links: usize,
+    pub inferred_links: usize,
+    pub isolated_notes: usize,
+    pub weak_note_count: usize,
+    pub formula_count: usize,
+    pub notes_with_formulas: usize,
+    pub average_note_strength: f64,
+    pub flashcard_set_count: usize,
+    pub flashcard_total_cards: usize,
+    pub revision_run_count: usize,
+    pub latest_revision_item_count: usize,
+    pub ai_ready_notes: usize,
+    pub ai_pending_notes: usize,
+    pub ai_failed_notes: usize,
+    pub ai_stale_notes: usize,
+    pub ai_missing_notes: usize,
+    pub exam_attempt_count: usize,
+    pub latest_exam_score: Option<f64>,
+    pub average_exam_score: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsSnapshotPoint {
+    pub captured_at: String,
+    pub note_count: usize,
+    pub total_concepts: usize,
+    pub covered_concepts: usize,
+    pub coverage_percentage: f64,
+    pub edge_count: usize,
+    pub strong_links: usize,
+    pub inferred_links: usize,
+    pub isolated_notes: usize,
+    pub weak_note_count: usize,
+    pub formula_count: usize,
+    pub notes_with_formulas: usize,
+    pub average_note_strength: f64,
+    pub flashcard_set_count: usize,
+    pub flashcard_total_cards: usize,
+    pub revision_run_count: usize,
+    pub latest_revision_item_count: usize,
+    pub ai_ready_notes: usize,
+    pub ai_pending_notes: usize,
+    pub ai_failed_notes: usize,
+    pub ai_stale_notes: usize,
+    pub ai_missing_notes: usize,
+    pub exam_attempt_count: usize,
+    pub latest_exam_score: Option<f64>,
+    pub average_exam_score: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultActivityBucket {
+    pub label: String,
+    pub note_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsCountBucket {
+    pub label: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsValuePoint {
+    pub label: String,
+    pub value: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsHighlight {
+    pub label: String,
+    pub value: String,
+    pub tone: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsExamPoint {
+    pub submitted_at: String,
+    pub exam_id: String,
+    pub exam_title: String,
+    pub score_percent: f64,
+    pub course_id: Option<String>,
+    pub course_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CourseStatisticsRow {
+    pub course_id: String,
+    pub course_name: String,
+    pub note_count: usize,
+    pub coverage_percentage: f64,
+    pub edge_count: usize,
+    pub weak_note_count: usize,
+    pub formula_count: usize,
+    pub average_note_strength: f64,
+    pub flashcard_total_cards: usize,
+    pub revision_run_count: usize,
+    pub ai_ready_notes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsNoteRow {
+    pub note_id: String,
+    pub title: String,
+    pub relative_path: String,
+    pub course_id: Option<String>,
+    pub course_name: Option<String>,
+    pub ai_status: String,
+    pub strength: f64,
+    pub link_count: usize,
+    pub concept_count: usize,
+    pub formula_count: usize,
+    pub modified_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsKnowledgeSummary {
+    pub total_concepts: usize,
+    pub covered_concepts: usize,
+    pub coverage_percentage: f64,
+    pub formula_count: usize,
+    pub notes_with_formulas: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsNotesSummary {
+    pub note_count: usize,
+    pub average_note_strength: f64,
+    pub weak_note_count: usize,
+    pub isolated_notes: usize,
+    pub stale_note_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsExamsSummary {
+    pub attempt_count: usize,
+    pub latest_score: Option<f64>,
+    pub average_score: Option<f64>,
+    pub review_count: usize,
+    pub mastered_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsAiSummary {
+    pub ready_notes: usize,
+    pub pending_notes: usize,
+    pub failed_notes: usize,
+    pub stale_notes: usize,
+    pub missing_notes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsOutputsSummary {
+    pub flashcard_set_count: usize,
+    pub flashcard_total_cards: usize,
+    pub revision_run_count: usize,
+    pub latest_revision_item_count: usize,
+    pub latest_flashcard_export: Option<String>,
+    pub latest_revision_note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultActivitySummary {
+    pub total_notes: usize,
+    pub recent_notes: usize,
+    pub stale_notes: usize,
+    pub unknown_notes: usize,
+    pub most_recent_modified_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitTimelinePoint {
+    pub bucket: String,
+    pub commit_count: usize,
+    pub changed_notes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCourseActivityRow {
+    pub course_id: Option<String>,
+    pub course_name: String,
+    pub folder: String,
+    pub commit_count: usize,
+    pub changed_notes: usize,
+    pub last_commit_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitNoteActivityRow {
+    pub note_id: Option<String>,
+    pub title: String,
+    pub relative_path: String,
+    pub course_id: Option<String>,
+    pub course_name: Option<String>,
+    pub change_count: usize,
+    pub last_commit_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitItem {
+    pub sha: String,
+    pub summary: String,
+    pub author_name: String,
+    pub committed_at: String,
+    pub changed_notes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitSummary {
+    pub repo_root: String,
+    pub total_markdown_commits: usize,
+    pub total_markdown_file_changes: usize,
+    pub last_commit_at: Option<String>,
+    pub recent_commit_count: usize,
+    pub active_days_30: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsOverviewSection {
+    pub summary: StatisticsOverview,
+    pub history: Vec<StatisticsSnapshotPoint>,
+    pub course_rows: Vec<CourseStatisticsRow>,
+    pub highlights: Vec<StatisticsHighlight>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsKnowledgeSection {
+    pub summary: StatisticsKnowledgeSummary,
+    pub history: Vec<StatisticsSnapshotPoint>,
+    pub top_concepts: Vec<ConceptMetric>,
+    pub top_formulas: Vec<FormulaMetric>,
+    pub formula_density_buckets: Vec<StatisticsCountBucket>,
+    pub course_rows: Vec<CourseStatisticsRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsNotesSection {
+    pub summary: StatisticsNotesSummary,
+    pub history: Vec<StatisticsSnapshotPoint>,
+    pub strength_buckets: Vec<StatisticsCountBucket>,
+    pub activity_buckets: Vec<VaultActivityBucket>,
+    pub weakest_notes: Vec<StatisticsNoteRow>,
+    pub most_connected_notes: Vec<StatisticsNoteRow>,
+    pub stalest_notes: Vec<StatisticsNoteRow>,
+    pub most_changed_notes: Vec<GitNoteActivityRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsExamsSection {
+    pub summary: StatisticsExamsSummary,
+    pub score_history: Vec<StatisticsExamPoint>,
+    pub attempt_history: Vec<StatisticsValuePoint>,
+    pub verdict_mix: Vec<StatisticsCountBucket>,
+    pub mastery_distribution: Vec<StatisticsCountBucket>,
+    pub recent_exams: Vec<StatisticsExamPoint>,
+    pub weakest_attempts: Vec<StatisticsExamPoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsAiSection {
+    pub summary: StatisticsAiSummary,
+    pub history: Vec<StatisticsSnapshotPoint>,
+    pub status_breakdown: Vec<StatisticsCountBucket>,
+    pub failed_notes: Vec<StatisticsNoteRow>,
+    pub stale_notes: Vec<StatisticsNoteRow>,
+    pub course_rows: Vec<CourseStatisticsRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsOutputsSection {
+    pub summary: StatisticsOutputsSummary,
+    pub history: Vec<StatisticsSnapshotPoint>,
+    pub output_mix: Vec<StatisticsCountBucket>,
+    pub latest_flashcards: FlashcardSummary,
+    pub latest_revision: RevisionSummary,
+    pub course_rows: Vec<CourseStatisticsRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsVaultActivitySection {
+    pub summary: VaultActivitySummary,
+    pub activity_buckets: Vec<VaultActivityBucket>,
+    pub recent_notes: Vec<StatisticsNoteRow>,
+    pub course_activity: Vec<CourseStatisticsRow>,
+    pub git_timeline: Vec<GitTimelinePoint>,
+    pub git_course_activity: Vec<GitCourseActivityRow>,
+    pub git_top_notes: Vec<GitNoteActivityRow>,
+    pub recent_commits: Vec<GitCommitItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsGitSection {
+    pub summary: GitSummary,
+    pub commit_timeline: Vec<GitTimelinePoint>,
+    pub churn_timeline: Vec<GitTimelinePoint>,
+    pub course_activity: Vec<GitCourseActivityRow>,
+    pub top_notes: Vec<GitNoteActivityRow>,
+    pub recent_commits: Vec<GitCommitItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatisticsResponse {
+    pub scope: StatisticsScope,
+    pub generated_at: String,
+    pub course_id: Option<String>,
+    pub course_name: Option<String>,
+    pub git_available: bool,
+    pub git_error: Option<String>,
+    pub overview: StatisticsOverviewSection,
+    pub knowledge: StatisticsKnowledgeSection,
+    pub notes: StatisticsNotesSection,
+    pub exams: StatisticsExamsSection,
+    pub ai: StatisticsAiSection,
+    pub outputs: StatisticsOutputsSection,
+    pub vault_activity: StatisticsVaultActivitySection,
+    pub git: Option<StatisticsGitSection>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NoteDetails {

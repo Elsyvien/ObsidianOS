@@ -653,16 +653,32 @@ where
         .map(|value| value.trim())
         .and_then(|value| value.strip_suffix("```").map(str::trim))
         .unwrap_or(trimmed);
+    let extracted = extract_json_object(cleaned).unwrap_or(cleaned);
 
-    serde_json::from_str(cleaned)
-        .or_else(|_| {
-            extract_json_object(cleaned)
-                .ok_or_else(|| anyhow!("AI response was not valid JSON"))
-                .and_then(|value| {
-                    serde_json::from_str(value).context("AI response was not valid JSON")
-                })
+    parse_json_candidate(cleaned)
+        .or_else(|_| parse_json_candidate(extracted))
+        .with_context(|| {
+            let preview = cleaned
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(220)
+                .collect::<String>();
+            format!("AI response was not valid JSON. Provider returned: {preview}")
         })
-        .context("AI response was not valid JSON")
+}
+
+fn parse_json_candidate<T>(content: &str) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let repaired = repair_json_like_blob(content);
+    serde_json::from_str(content)
+        .map_err(anyhow::Error::from)
+        .or_else(|_| serde_json::from_str(&repaired).map_err(anyhow::Error::from))
+        .or_else(|_| json5::from_str(content).map_err(anyhow::Error::from))
+        .or_else(|_| json5::from_str(&repaired).map_err(anyhow::Error::from))
 }
 
 fn format_provider_rejection(status: StatusCode, body: &str) -> String {
@@ -712,6 +728,115 @@ fn format_provider_rejection(status: StatusCode, body: &str) -> String {
 
 fn normalize_error_text(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn repair_json_like_blob(content: &str) -> String {
+    let normalized = content
+        .replace(['“', '”'], "\"")
+        .replace(['‘', '’'], "'");
+    let escaped = escape_invalid_backslashes(&normalized);
+    remove_trailing_commas(&escaped)
+}
+
+fn escape_invalid_backslashes(content: &str) -> String {
+    let mut result = String::with_capacity(content.len() + 16);
+    let mut chars = content.chars().peekable();
+    let mut in_string = false;
+    let mut quote = '"';
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if in_string {
+            if escaped {
+                result.push(ch);
+                escaped = false;
+                continue;
+            }
+
+            if ch == '\\' {
+                let next = chars.peek().copied();
+                let valid_escape = next
+                    .map(|next| is_valid_json_escape(next, quote))
+                    .unwrap_or(false);
+                result.push('\\');
+                if !valid_escape {
+                    result.push('\\');
+                } else {
+                    escaped = true;
+                }
+                continue;
+            }
+
+            if ch == quote {
+                in_string = false;
+            }
+
+            result.push(ch);
+            continue;
+        }
+
+        if ch == '"' || ch == '\'' {
+            in_string = true;
+            quote = ch;
+        }
+
+        result.push(ch);
+    }
+
+    result
+}
+
+fn is_valid_json_escape(ch: char, quote: char) -> bool {
+    matches!(ch, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') || ch == quote
+}
+
+fn remove_trailing_commas(content: &str) -> String {
+    let mut result = String::with_capacity(content.len());
+    let chars = content.chars().collect::<Vec<_>>();
+    let mut index = 0usize;
+    let mut in_string = false;
+    let mut quote = '"';
+    let mut escaped = false;
+
+    while index < chars.len() {
+        let ch = chars[index];
+        if in_string {
+            result.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == quote {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        if ch == '"' || ch == '\'' {
+            in_string = true;
+            quote = ch;
+            result.push(ch);
+            index += 1;
+            continue;
+        }
+
+        if ch == ',' {
+            let mut lookahead = index + 1;
+            while lookahead < chars.len() && chars[lookahead].is_whitespace() {
+                lookahead += 1;
+            }
+            if lookahead < chars.len() && matches!(chars[lookahead], '}' | ']') {
+                index += 1;
+                continue;
+            }
+        }
+
+        result.push(ch);
+        index += 1;
+    }
+
+    result
 }
 
 fn with_optional_bearer(request: RequestBuilder, api_key: &str) -> RequestBuilder {
@@ -1409,6 +1534,30 @@ mod tests {
         assert_eq!(
             message,
             "Venice rate-limited this request. mistralai/mistral-small-3.1-24b-instruct:free is temporarily rate-limited upstream. Please retry shortly."
+        );
+    }
+
+    #[test]
+    fn repairs_invalid_backslashes_inside_model_json_strings() {
+        let payload: SamplePayload =
+            parse_json_blob("{\"summary\":\"Use \\sum normally\"}").expect("payload");
+        assert_eq!(
+            payload,
+            SamplePayload {
+                summary: "Use \\sum normally".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_json5_like_model_output_with_single_quotes_and_trailing_comma() {
+        let payload: SamplePayload =
+            parse_json_blob("{summary: 'ready',}").expect("payload");
+        assert_eq!(
+            payload,
+            SamplePayload {
+                summary: "ready".to_string()
+            }
         );
     }
 

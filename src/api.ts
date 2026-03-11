@@ -26,6 +26,8 @@ import type {
   ScanReport,
   CreateChatThreadRequest,
   SendChatMessageRequest,
+  StatisticsResponse,
+  StatisticsScope,
   ValidationResult,
   WorkspaceSnapshot,
 } from "./types";
@@ -47,6 +49,7 @@ import {
   generateFormulaBriefMock,
   generateNoteAiInsightMock,
   generateRevisionNoteMock,
+  getStatisticsMock,
   listChatThreadsMock,
   queueExamsMock,
   removeExamSourceNotesMock,
@@ -119,6 +122,11 @@ export function runScan() {
 export function getDashboard(courseId: string | null) {
   if (!isTauriRuntime()) return getDashboardMock(courseId);
   return invoke<DashboardData | null>("get_dashboard", { courseId });
+}
+
+export function getStatistics(scope: StatisticsScope, courseId?: string | null) {
+  if (!isTauriRuntime()) return getStatisticsMock(scope, courseId);
+  return invoke<StatisticsResponse | null>("get_statistics", { scope, courseId });
 }
 
 export function getNoteDetails(noteId: string) {

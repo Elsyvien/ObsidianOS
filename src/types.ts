@@ -553,6 +553,304 @@ export type DashboardData = {
   ai: AiCourseSummary;
 };
 
+export type StatisticsScope = "course" | "vault";
+
+export type StatisticsOverview = {
+  noteCount: number;
+  totalConcepts: number;
+  coveredConcepts: number;
+  coveragePercentage: number;
+  edgeCount: number;
+  strongLinks: number;
+  inferredLinks: number;
+  isolatedNotes: number;
+  weakNoteCount: number;
+  formulaCount: number;
+  notesWithFormulas: number;
+  averageNoteStrength: number;
+  flashcardSetCount: number;
+  flashcardTotalCards: number;
+  revisionRunCount: number;
+  latestRevisionItemCount: number;
+  aiReadyNotes: number;
+  aiPendingNotes: number;
+  aiFailedNotes: number;
+  aiStaleNotes: number;
+  aiMissingNotes: number;
+  examAttemptCount: number;
+  latestExamScore: number | null;
+  averageExamScore: number | null;
+};
+
+export type StatisticsSnapshotPoint = {
+  capturedAt: string;
+  noteCount: number;
+  totalConcepts: number;
+  coveredConcepts: number;
+  coveragePercentage: number;
+  edgeCount: number;
+  strongLinks: number;
+  inferredLinks: number;
+  isolatedNotes: number;
+  weakNoteCount: number;
+  formulaCount: number;
+  notesWithFormulas: number;
+  averageNoteStrength: number;
+  flashcardSetCount: number;
+  flashcardTotalCards: number;
+  revisionRunCount: number;
+  latestRevisionItemCount: number;
+  aiReadyNotes: number;
+  aiPendingNotes: number;
+  aiFailedNotes: number;
+  aiStaleNotes: number;
+  aiMissingNotes: number;
+  examAttemptCount: number;
+  latestExamScore: number | null;
+  averageExamScore: number | null;
+};
+
+export type VaultActivityBucket = {
+  label: string;
+  noteCount: number;
+};
+
+export type StatisticsCountBucket = {
+  label: string;
+  count: number;
+};
+
+export type StatisticsValuePoint = {
+  label: string;
+  value: number;
+};
+
+export type StatisticsHighlight = {
+  label: string;
+  value: string;
+  tone: string;
+};
+
+export type StatisticsExamPoint = {
+  submittedAt: string;
+  examId: string;
+  examTitle: string;
+  scorePercent: number;
+  courseId: string | null;
+  courseName: string | null;
+};
+
+export type CourseStatisticsRow = {
+  courseId: string;
+  courseName: string;
+  noteCount: number;
+  coveragePercentage: number;
+  edgeCount: number;
+  weakNoteCount: number;
+  formulaCount: number;
+  averageNoteStrength: number;
+  flashcardTotalCards: number;
+  revisionRunCount: number;
+  aiReadyNotes: number;
+};
+
+export type StatisticsNoteRow = {
+  noteId: string;
+  title: string;
+  relativePath: string;
+  courseId: string | null;
+  courseName: string | null;
+  aiStatus: string;
+  strength: number;
+  linkCount: number;
+  conceptCount: number;
+  formulaCount: number;
+  modifiedAt: string | null;
+};
+
+export type StatisticsKnowledgeSummary = {
+  totalConcepts: number;
+  coveredConcepts: number;
+  coveragePercentage: number;
+  formulaCount: number;
+  notesWithFormulas: number;
+};
+
+export type StatisticsNotesSummary = {
+  noteCount: number;
+  averageNoteStrength: number;
+  weakNoteCount: number;
+  isolatedNotes: number;
+  staleNoteCount: number;
+};
+
+export type StatisticsExamsSummary = {
+  attemptCount: number;
+  latestScore: number | null;
+  averageScore: number | null;
+  reviewCount: number;
+  masteredCount: number;
+};
+
+export type StatisticsAiSummary = {
+  readyNotes: number;
+  pendingNotes: number;
+  failedNotes: number;
+  staleNotes: number;
+  missingNotes: number;
+};
+
+export type StatisticsOutputsSummary = {
+  flashcardSetCount: number;
+  flashcardTotalCards: number;
+  revisionRunCount: number;
+  latestRevisionItemCount: number;
+  latestFlashcardExport: string | null;
+  latestRevisionNote: string | null;
+};
+
+export type VaultActivitySummary = {
+  totalNotes: number;
+  recentNotes: number;
+  staleNotes: number;
+  unknownNotes: number;
+  mostRecentModifiedAt: string | null;
+};
+
+export type GitTimelinePoint = {
+  bucket: string;
+  commitCount: number;
+  changedNotes: number;
+};
+
+export type GitCourseActivityRow = {
+  courseId: string | null;
+  courseName: string;
+  folder: string;
+  commitCount: number;
+  changedNotes: number;
+  lastCommitAt: string | null;
+};
+
+export type GitNoteActivityRow = {
+  noteId: string | null;
+  title: string;
+  relativePath: string;
+  courseId: string | null;
+  courseName: string | null;
+  changeCount: number;
+  lastCommitAt: string | null;
+};
+
+export type GitCommitItem = {
+  sha: string;
+  summary: string;
+  authorName: string;
+  committedAt: string;
+  changedNotes: number;
+};
+
+export type GitSummary = {
+  repoRoot: string;
+  totalMarkdownCommits: number;
+  totalMarkdownFileChanges: number;
+  lastCommitAt: string | null;
+  recentCommitCount: number;
+  activeDays30: number;
+};
+
+export type StatisticsOverviewSection = {
+  summary: StatisticsOverview;
+  history: StatisticsSnapshotPoint[];
+  courseRows: CourseStatisticsRow[];
+  highlights: StatisticsHighlight[];
+};
+
+export type StatisticsKnowledgeSection = {
+  summary: StatisticsKnowledgeSummary;
+  history: StatisticsSnapshotPoint[];
+  topConcepts: ConceptMetric[];
+  topFormulas: FormulaMetric[];
+  formulaDensityBuckets: StatisticsCountBucket[];
+  courseRows: CourseStatisticsRow[];
+};
+
+export type StatisticsNotesSection = {
+  summary: StatisticsNotesSummary;
+  history: StatisticsSnapshotPoint[];
+  strengthBuckets: StatisticsCountBucket[];
+  activityBuckets: VaultActivityBucket[];
+  weakestNotes: StatisticsNoteRow[];
+  mostConnectedNotes: StatisticsNoteRow[];
+  stalestNotes: StatisticsNoteRow[];
+  mostChangedNotes: GitNoteActivityRow[];
+};
+
+export type StatisticsExamsSection = {
+  summary: StatisticsExamsSummary;
+  scoreHistory: StatisticsExamPoint[];
+  attemptHistory: StatisticsValuePoint[];
+  verdictMix: StatisticsCountBucket[];
+  masteryDistribution: StatisticsCountBucket[];
+  recentExams: StatisticsExamPoint[];
+  weakestAttempts: StatisticsExamPoint[];
+};
+
+export type StatisticsAiSection = {
+  summary: StatisticsAiSummary;
+  history: StatisticsSnapshotPoint[];
+  statusBreakdown: StatisticsCountBucket[];
+  failedNotes: StatisticsNoteRow[];
+  staleNotes: StatisticsNoteRow[];
+  courseRows: CourseStatisticsRow[];
+};
+
+export type StatisticsOutputsSection = {
+  summary: StatisticsOutputsSummary;
+  history: StatisticsSnapshotPoint[];
+  outputMix: StatisticsCountBucket[];
+  latestFlashcards: FlashcardSummary;
+  latestRevision: RevisionSummary;
+  courseRows: CourseStatisticsRow[];
+};
+
+export type StatisticsVaultActivitySection = {
+  summary: VaultActivitySummary;
+  activityBuckets: VaultActivityBucket[];
+  recentNotes: StatisticsNoteRow[];
+  courseActivity: CourseStatisticsRow[];
+  gitTimeline: GitTimelinePoint[];
+  gitCourseActivity: GitCourseActivityRow[];
+  gitTopNotes: GitNoteActivityRow[];
+  recentCommits: GitCommitItem[];
+};
+
+export type StatisticsGitSection = {
+  summary: GitSummary;
+  commitTimeline: GitTimelinePoint[];
+  churnTimeline: GitTimelinePoint[];
+  courseActivity: GitCourseActivityRow[];
+  topNotes: GitNoteActivityRow[];
+  recentCommits: GitCommitItem[];
+};
+
+export type StatisticsResponse = {
+  scope: StatisticsScope;
+  generatedAt: string;
+  courseId: string | null;
+  courseName: string | null;
+  gitAvailable: boolean;
+  gitError: string | null;
+  overview: StatisticsOverviewSection;
+  knowledge: StatisticsKnowledgeSection;
+  notes: StatisticsNotesSection;
+  exams: StatisticsExamsSection;
+  ai: StatisticsAiSection;
+  outputs: StatisticsOutputsSection;
+  vaultActivity: StatisticsVaultActivitySection;
+  git: StatisticsGitSection | null;
+};
+
 export type WorkspaceSnapshot = {
   vault: VaultConfig | null;
   aiSettings: AiSettings | null;

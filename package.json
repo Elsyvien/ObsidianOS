@@ -19,7 +19,8 @@
     "lucide-react": "^0.577.0",
     "mathjax-full": "^3.2.1",
     "react": "^19.1.0",
-    "react-dom": "^19.1.0"
+    "react-dom": "^19.1.0",
+    "recharts": "^3.8.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

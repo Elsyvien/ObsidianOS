@@ -4,6 +4,7 @@ import {
   BarChart2,
   BookOpen,
   BrainCircuit,
+  ChartNoAxesCombined,
   ClipboardCheck,
   FolderGit2,
   MessageSquareMore,
@@ -18,6 +19,7 @@ import { BrandMark } from "./BrandMark";
 
 const VIEW_ICONS: Record<AppView, React.ElementType> = {
   overview: BarChart2,
+  statistics: ChartNoAxesCombined,
   notes: BookOpen,
   formulas: Sigma,
   ai: BrainCircuit,
@@ -41,7 +43,7 @@ type AppSidebarProps = {
   onSelectCourse: (courseId: string) => void;
 };
 
-const STUDY_VIEWS: AppView[] = ["overview", "notes", "formulas", "ai", "exams", "chat", "outputs", "logs"];
+const STUDY_VIEWS: AppView[] = ["overview", "statistics", "notes", "formulas", "ai", "exams", "chat", "outputs", "logs"];
 const CONFIG_VIEWS: AppView[] = ["courses", "settings"];
 
 export function AppSidebar({
@@ -52,7 +54,6 @@ export function AppSidebar({
   onChangeView,
   onSelectCourse,
 }: AppSidebarProps) {
-
   return (
     <aside className="sidebar">
       <div className="sidebar__brand">

@@ -26,6 +26,8 @@ import type {
   ExamWorkspaceSnapshot,
   FlashcardGenerationRequest,
   FlashcardGenerationResult,
+  GitCourseActivityRow,
+  GitTimelinePoint,
   FormulaBrief,
   FormulaDetails,
   FormulaLinkedNote,
@@ -40,7 +42,16 @@ import type {
   RevisionNoteResult,
   ScanReport,
   SendChatMessageRequest,
+  StatisticsCountBucket,
+  StatisticsExamPoint,
+  StatisticsOverview,
+  StatisticsNoteRow,
+  StatisticsResponse,
+  StatisticsScope,
+  StatisticsSnapshotPoint,
+  StatisticsValuePoint,
   ValidationResult,
+  VaultActivityBucket,
   WorkspaceSnapshot,
 } from "./types";
 
@@ -289,6 +300,18 @@ export async function getDashboardMock(courseId: string | null) {
   state.workspace.selectedCourseId = selectedCourseId;
   state.workspace.dashboard = buildDashboard(selectedCourseId);
   return clone(state.workspace.dashboard);
+}
+
+export async function getStatisticsMock(scope: StatisticsScope, courseId?: string | null) {
+  ensureDemoWorkspace();
+
+  if (scope === "course") {
+    const selectedCourseId = courseId ?? state.workspace.selectedCourseId ?? state.workspace.courses[0]?.id ?? null;
+    if (!selectedCourseId) return null;
+    return clone(buildCourseStatisticsResponse(selectedCourseId));
+  }
+
+  return clone(buildVaultStatisticsResponse());
 }
 
 export async function getNoteDetailsMock(noteId: string) {
@@ -810,6 +833,654 @@ function buildDashboard(courseId: string): DashboardData {
     },
     exams: buildExamWorkspace(courseId).summary,
     notes: noteSummaries,
+  };
+}
+
+function buildCourseStatisticsResponse(courseId: string): StatisticsResponse {
+  const course = state.workspace.courses.find((entry) => entry.id === courseId);
+  if (!course) {
+    throw new Error("Course not found.");
+  }
+
+  const dashboard = buildDashboard(courseId);
+  const summary = buildStatisticsOverviewFromDashboard(dashboard);
+  const history = buildStatisticsHistory(summary, course.name.length + 1);
+  const examHistory = buildStatisticsExamHistory(courseId);
+  const activityBuckets = buildStatisticsActivityBuckets(courseId);
+  const noteRows = buildStatisticsNoteRows(courseId);
+  const git = buildMockGitAnalytics("course", courseId);
+
+  return {
+    scope: "course",
+    generatedAt: now(),
+    courseId: course.id,
+    courseName: course.name,
+    gitAvailable: Boolean(git),
+    gitError: null,
+    overview: {
+      summary,
+      history,
+      courseRows: [],
+      highlights: buildOverviewHighlights([], git?.courseActivity ?? []),
+    },
+    knowledge: {
+      summary: {
+        totalConcepts: summary.totalConcepts,
+        coveredConcepts: summary.coveredConcepts,
+        coveragePercentage: summary.coveragePercentage,
+        formulaCount: summary.formulaCount,
+        notesWithFormulas: summary.notesWithFormulas,
+      },
+      history,
+      topConcepts: dashboard.topConcepts,
+      topFormulas: dashboard.formulas,
+      formulaDensityBuckets: buildFormulaDensityBuckets(noteRows),
+      courseRows: [],
+    },
+    notes: {
+      summary: {
+        noteCount: summary.noteCount,
+        averageNoteStrength: summary.averageNoteStrength,
+        weakNoteCount: summary.weakNoteCount,
+        isolatedNotes: summary.isolatedNotes,
+        staleNoteCount: activityBuckets.find((bucket) => bucket.label === "90+ days")?.noteCount ?? 0,
+      },
+      history,
+      strengthBuckets: buildStrengthBuckets(noteRows),
+      activityBuckets,
+      weakestNotes: [...noteRows].sort((left, right) => left.strength - right.strength).slice(0, 8),
+      mostConnectedNotes: [...noteRows].sort((left, right) => right.linkCount - left.linkCount).slice(0, 8),
+      stalestNotes: [...noteRows].sort((left, right) => (left.modifiedAt ?? "").localeCompare(right.modifiedAt ?? "")).slice(0, 8),
+      mostChangedNotes: git?.topNotes ?? [],
+    },
+    exams: {
+      summary: {
+        attemptCount: summary.examAttemptCount,
+        latestScore: summary.latestExamScore,
+        averageScore: summary.averageExamScore,
+        reviewCount: buildExamWorkspace(courseId).summary.reviewCount,
+        masteredCount: buildExamWorkspace(courseId).summary.masteredCount,
+      },
+      scoreHistory: examHistory,
+      attemptHistory: buildAttemptHistory(examHistory),
+      verdictMix: buildVerdictMix(courseId),
+      masteryDistribution: buildMasteryDistribution(courseId),
+      recentExams: [...examHistory].reverse().slice(0, 8),
+      weakestAttempts: [...examHistory].sort((left, right) => left.scorePercent - right.scorePercent).slice(0, 8),
+    },
+    ai: {
+      summary: {
+        readyNotes: summary.aiReadyNotes,
+        pendingNotes: summary.aiPendingNotes,
+        failedNotes: summary.aiFailedNotes,
+        staleNotes: summary.aiStaleNotes,
+        missingNotes: summary.aiMissingNotes,
+      },
+      history,
+      statusBreakdown: buildAiBreakdown(summary),
+      failedNotes: noteRows.filter((note) => note.aiStatus === "failed").slice(0, 8),
+      staleNotes: noteRows.filter((note) => note.aiStatus === "stale" || note.aiStatus === "missing").slice(0, 8),
+      courseRows: [],
+    },
+    outputs: {
+      summary: {
+        flashcardSetCount: summary.flashcardSetCount,
+        flashcardTotalCards: summary.flashcardTotalCards,
+        revisionRunCount: summary.revisionRunCount,
+        latestRevisionItemCount: summary.latestRevisionItemCount,
+        latestFlashcardExport: dashboard.flashcards.exportPath,
+        latestRevisionNote: dashboard.revision.notePath,
+      },
+      history,
+      outputMix: [
+        { label: "Flashcard sets", count: summary.flashcardSetCount },
+        { label: "Cards", count: summary.flashcardTotalCards },
+        { label: "Revision runs", count: summary.revisionRunCount },
+      ],
+      latestFlashcards: dashboard.flashcards,
+      latestRevision: dashboard.revision,
+      courseRows: [],
+    },
+    vaultActivity: {
+      summary: {
+        totalNotes: noteRows.length,
+        recentNotes: activityBuckets.find((bucket) => bucket.label === "0-7 days")?.noteCount ?? 0,
+        staleNotes: activityBuckets.find((bucket) => bucket.label === "90+ days")?.noteCount ?? 0,
+        unknownNotes: activityBuckets.find((bucket) => bucket.label === "Unknown")?.noteCount ?? 0,
+        mostRecentModifiedAt: noteRows[0]?.modifiedAt ?? null,
+      },
+      activityBuckets,
+      recentNotes: [...noteRows].slice(0, 8),
+      courseActivity: [],
+      gitTimeline: git?.commitTimeline ?? [],
+      gitCourseActivity: git?.courseActivity ?? [],
+      gitTopNotes: git?.topNotes ?? [],
+      recentCommits: git?.recentCommits ?? [],
+    },
+    git,
+  };
+}
+
+function buildVaultStatisticsResponse(): StatisticsResponse {
+  const courseStats = state.workspace.courses.map((course) => {
+    const dashboard = buildDashboard(course.id);
+    const summary = buildStatisticsOverviewFromDashboard(dashboard);
+
+    return {
+      course,
+      dashboard,
+      summary,
+      notes: buildStatisticsNoteRows(course.id),
+    };
+  });
+
+  const totalConcepts = courseStats.reduce((sum, entry) => sum + entry.summary.totalConcepts, 0);
+  const coveredConcepts = courseStats.reduce((sum, entry) => sum + entry.summary.coveredConcepts, 0);
+  const summary: StatisticsOverview = {
+    noteCount: courseStats.reduce((sum, entry) => sum + entry.summary.noteCount, 0),
+    totalConcepts,
+    coveredConcepts,
+    coveragePercentage: totalConcepts ? Number(((coveredConcepts / totalConcepts) * 100).toFixed(1)) : 0,
+    edgeCount: courseStats.reduce((sum, entry) => sum + entry.summary.edgeCount, 0),
+    strongLinks: courseStats.reduce((sum, entry) => sum + entry.summary.strongLinks, 0),
+    inferredLinks: courseStats.reduce((sum, entry) => sum + entry.summary.inferredLinks, 0),
+    isolatedNotes: courseStats.reduce((sum, entry) => sum + entry.summary.isolatedNotes, 0),
+    weakNoteCount: courseStats.reduce((sum, entry) => sum + entry.summary.weakNoteCount, 0),
+    formulaCount: courseStats.reduce((sum, entry) => sum + entry.summary.formulaCount, 0),
+    notesWithFormulas: courseStats.reduce((sum, entry) => sum + entry.summary.notesWithFormulas, 0),
+    averageNoteStrength: Number(
+      (
+        courseStats.reduce((sum, entry) => sum + entry.summary.averageNoteStrength, 0) /
+        Math.max(courseStats.length, 1)
+      ).toFixed(1),
+    ),
+    flashcardSetCount: courseStats.reduce((sum, entry) => sum + entry.summary.flashcardSetCount, 0),
+    flashcardTotalCards: courseStats.reduce((sum, entry) => sum + entry.summary.flashcardTotalCards, 0),
+    revisionRunCount: courseStats.reduce((sum, entry) => sum + entry.summary.revisionRunCount, 0),
+    latestRevisionItemCount: Math.max(...courseStats.map((entry) => entry.summary.latestRevisionItemCount), 0),
+    aiReadyNotes: courseStats.reduce((sum, entry) => sum + entry.summary.aiReadyNotes, 0),
+    aiPendingNotes: courseStats.reduce((sum, entry) => sum + entry.summary.aiPendingNotes, 0),
+    aiFailedNotes: courseStats.reduce((sum, entry) => sum + entry.summary.aiFailedNotes, 0),
+    aiStaleNotes: courseStats.reduce((sum, entry) => sum + entry.summary.aiStaleNotes, 0),
+    aiMissingNotes: courseStats.reduce((sum, entry) => sum + entry.summary.aiMissingNotes, 0),
+    examAttemptCount: courseStats.reduce((sum, entry) => sum + entry.summary.examAttemptCount, 0),
+    latestExamScore: (() => {
+      const latest = courseStats
+        .flatMap((entry) => buildStatisticsExamHistory(entry.course.id))
+        .sort((left, right) => left.submittedAt.localeCompare(right.submittedAt))
+        .pop();
+      return latest?.scorePercent ?? null;
+    })(),
+    averageExamScore: buildAverageScore(courseStats.flatMap((entry) => buildStatisticsExamHistory(entry.course.id))),
+  };
+  const history = buildStatisticsHistory(summary, 9);
+  const examHistory = buildVaultExamHistory();
+  const activityBuckets = buildStatisticsActivityBuckets();
+  const courseRows = courseStats
+    .map(({ course, summary }) => ({
+      courseId: course.id,
+      courseName: course.name,
+      noteCount: summary.noteCount,
+      coveragePercentage: summary.coveragePercentage,
+      edgeCount: summary.edgeCount,
+      weakNoteCount: summary.weakNoteCount,
+      formulaCount: summary.formulaCount,
+      averageNoteStrength: summary.averageNoteStrength,
+      flashcardTotalCards: summary.flashcardTotalCards,
+      revisionRunCount: summary.revisionRunCount,
+      aiReadyNotes: summary.aiReadyNotes,
+    }))
+    .sort((left, right) => left.courseName.localeCompare(right.courseName));
+  const noteRows = courseStats.flatMap((entry) => entry.notes);
+  const git = buildMockGitAnalytics("vault");
+  const topConcepts = courseStats.flatMap((entry) => entry.dashboard.topConcepts).slice(0, 8);
+  const topFormulas = courseStats.flatMap((entry) => entry.dashboard.formulas).slice(0, 6);
+
+  return {
+    scope: "vault",
+    generatedAt: now(),
+    courseId: null,
+    courseName: null,
+    gitAvailable: true,
+    gitError: null,
+    overview: {
+      summary,
+      history,
+      courseRows,
+      highlights: buildOverviewHighlights(courseRows, git?.courseActivity ?? []),
+    },
+    knowledge: {
+      summary: {
+        totalConcepts: summary.totalConcepts,
+        coveredConcepts: summary.coveredConcepts,
+        coveragePercentage: summary.coveragePercentage,
+        formulaCount: summary.formulaCount,
+        notesWithFormulas: summary.notesWithFormulas,
+      },
+      history,
+      topConcepts,
+      topFormulas,
+      formulaDensityBuckets: buildFormulaDensityBuckets(noteRows),
+      courseRows,
+    },
+    notes: {
+      summary: {
+        noteCount: summary.noteCount,
+        averageNoteStrength: summary.averageNoteStrength,
+        weakNoteCount: summary.weakNoteCount,
+        isolatedNotes: summary.isolatedNotes,
+        staleNoteCount: activityBuckets.find((bucket) => bucket.label === "90+ days")?.noteCount ?? 0,
+      },
+      history,
+      strengthBuckets: buildStrengthBuckets(noteRows),
+      activityBuckets,
+      weakestNotes: [...noteRows].sort((left, right) => left.strength - right.strength).slice(0, 8),
+      mostConnectedNotes: [...noteRows].sort((left, right) => right.linkCount - left.linkCount).slice(0, 8),
+      stalestNotes: [...noteRows].sort((left, right) => (left.modifiedAt ?? "").localeCompare(right.modifiedAt ?? "")).slice(0, 8),
+      mostChangedNotes: git?.topNotes ?? [],
+    },
+    exams: {
+      summary: {
+        attemptCount: summary.examAttemptCount,
+        latestScore: summary.latestExamScore,
+        averageScore: summary.averageExamScore,
+        reviewCount: courseStats.reduce((sum, entry) => sum + entry.dashboard.exams.reviewCount, 0),
+        masteredCount: courseStats.reduce((sum, entry) => sum + entry.dashboard.exams.masteredCount, 0),
+      },
+      scoreHistory: examHistory,
+      attemptHistory: buildAttemptHistory(examHistory),
+      verdictMix: buildVerdictMix(),
+      masteryDistribution: buildMasteryDistribution(),
+      recentExams: [...examHistory].reverse().slice(0, 8),
+      weakestAttempts: [...examHistory].sort((left, right) => left.scorePercent - right.scorePercent).slice(0, 8),
+    },
+    ai: {
+      summary: {
+        readyNotes: summary.aiReadyNotes,
+        pendingNotes: summary.aiPendingNotes,
+        failedNotes: summary.aiFailedNotes,
+        staleNotes: summary.aiStaleNotes,
+        missingNotes: summary.aiMissingNotes,
+      },
+      history,
+      statusBreakdown: buildAiBreakdown(summary),
+      failedNotes: noteRows.filter((note) => note.aiStatus === "failed").slice(0, 8),
+      staleNotes: noteRows.filter((note) => note.aiStatus === "stale" || note.aiStatus === "missing").slice(0, 8),
+      courseRows,
+    },
+    outputs: {
+      summary: {
+        flashcardSetCount: summary.flashcardSetCount,
+        flashcardTotalCards: summary.flashcardTotalCards,
+        revisionRunCount: summary.revisionRunCount,
+        latestRevisionItemCount: summary.latestRevisionItemCount,
+        latestFlashcardExport:
+          courseStats.find((entry) => entry.dashboard.flashcards.exportPath)?.dashboard.flashcards.exportPath ?? null,
+        latestRevisionNote:
+          courseStats.find((entry) => entry.dashboard.revision.notePath)?.dashboard.revision.notePath ?? null,
+      },
+      history,
+      outputMix: [
+        { label: "Flashcard sets", count: summary.flashcardSetCount },
+        { label: "Cards", count: summary.flashcardTotalCards },
+        { label: "Revision runs", count: summary.revisionRunCount },
+      ],
+      latestFlashcards: {
+        setCount: summary.flashcardSetCount,
+        totalCards: summary.flashcardTotalCards,
+        lastGeneratedAt:
+          courseStats.find((entry) => entry.dashboard.flashcards.lastGeneratedAt)?.dashboard.flashcards.lastGeneratedAt ?? null,
+        exportPath:
+          courseStats.find((entry) => entry.dashboard.flashcards.exportPath)?.dashboard.flashcards.exportPath ?? null,
+      },
+      latestRevision: {
+        lastGeneratedAt:
+          courseStats.find((entry) => entry.dashboard.revision.lastGeneratedAt)?.dashboard.revision.lastGeneratedAt ?? null,
+        notePath:
+          courseStats.find((entry) => entry.dashboard.revision.notePath)?.dashboard.revision.notePath ?? null,
+        itemCount: summary.latestRevisionItemCount,
+      },
+      courseRows,
+    },
+    vaultActivity: {
+      summary: {
+        totalNotes: noteRows.length,
+        recentNotes: activityBuckets.find((bucket) => bucket.label === "0-7 days")?.noteCount ?? 0,
+        staleNotes: activityBuckets.find((bucket) => bucket.label === "90+ days")?.noteCount ?? 0,
+        unknownNotes: activityBuckets.find((bucket) => bucket.label === "Unknown")?.noteCount ?? 0,
+        mostRecentModifiedAt: noteRows[0]?.modifiedAt ?? null,
+      },
+      activityBuckets,
+      recentNotes: noteRows.slice(0, 8),
+      courseActivity: courseRows,
+      gitTimeline: git?.commitTimeline ?? [],
+      gitCourseActivity: git?.courseActivity ?? [],
+      gitTopNotes: git?.topNotes ?? [],
+      recentCommits: git?.recentCommits ?? [],
+    },
+    git,
+  };
+}
+
+function buildStatisticsOverviewFromDashboard(dashboard: DashboardData): StatisticsOverview {
+  const examHistory = buildStatisticsExamHistory(dashboard.selectedCourseId ?? "");
+  const latestExam = examHistory.length > 0 ? examHistory[examHistory.length - 1] : null;
+  const averageNoteStrength = dashboard.notes.length
+    ? Number((dashboard.notes.reduce((sum, note) => sum + note.strength, 0) / dashboard.notes.length).toFixed(1))
+    : 0;
+  const notesWithFormulas = dashboard.notes.filter((note) => note.formulaCount > 0).length;
+  return {
+    noteCount: dashboard.graph.noteCount,
+    totalConcepts: dashboard.coverage.totalConcepts,
+    coveredConcepts: dashboard.coverage.coveredConcepts,
+    coveragePercentage: dashboard.coverage.percentage,
+    edgeCount: dashboard.graph.edgeCount,
+    strongLinks: dashboard.graph.strongLinks,
+    inferredLinks: dashboard.graph.inferredLinks,
+    isolatedNotes: dashboard.graph.isolatedNotes,
+    weakNoteCount: dashboard.weakNotes.length,
+    formulaCount: dashboard.formulas.length,
+    notesWithFormulas,
+    averageNoteStrength,
+    flashcardSetCount: dashboard.flashcards.setCount,
+    flashcardTotalCards: dashboard.flashcards.totalCards,
+    revisionRunCount: dashboard.revision.lastGeneratedAt ? 1 : 0,
+    latestRevisionItemCount: dashboard.revision.itemCount,
+    aiReadyNotes: dashboard.ai.readyNotes,
+    aiPendingNotes: dashboard.ai.pendingNotes,
+    aiFailedNotes: dashboard.ai.failedNotes,
+    aiStaleNotes: dashboard.ai.staleNotes,
+    aiMissingNotes: dashboard.ai.missingNotes,
+    examAttemptCount: examHistory.length,
+    latestExamScore: latestExam?.scorePercent ?? null,
+    averageExamScore: buildAverageScore(examHistory),
+  };
+}
+
+function buildStatisticsHistory(
+  current: StatisticsOverview,
+  seed: number,
+): StatisticsSnapshotPoint[] {
+  return Array.from({ length: 6 }, (_, index) => {
+    const progress = (index + 1) / 6;
+    const noteCount = Math.max(1, Math.round(current.noteCount * (0.55 + progress * 0.45)));
+    const totalConcepts = Math.max(1, Math.round(current.totalConcepts * (0.7 + progress * 0.3)));
+    const coveredConcepts = Math.min(
+      totalConcepts,
+      Math.max(0, Math.round(current.coveredConcepts * (0.35 + progress * 0.65))),
+    );
+    const edgeCount = Math.max(0, Math.round(current.edgeCount * (0.4 + progress * 0.6)));
+    const strongLinks = Math.max(0, Math.round(current.strongLinks * (0.35 + progress * 0.65)));
+    const inferredLinks = Math.max(0, Math.round(current.inferredLinks * (0.5 + progress * 0.5)));
+    const weakNoteCount = Math.max(
+      0,
+      Math.round(current.weakNoteCount * (1.15 - progress * 0.35 + ((seed + index) % 2) * 0.03)),
+    );
+    const formulaCount = Math.max(0, Math.round(current.formulaCount * (0.5 + progress * 0.5)));
+    const coveragePercentage = totalConcepts
+      ? Number(((coveredConcepts / totalConcepts) * 100).toFixed(1))
+      : 0;
+    const examAttemptCount = Math.max(0, Math.round(current.examAttemptCount * progress));
+    const averageExamScore =
+      current.averageExamScore === null ? null : Number((58 + progress * 24 + (seed % 5)).toFixed(1));
+    const latestExamScore =
+      current.latestExamScore === null ? null : Number((60 + progress * 22 + ((seed + index) % 4)).toFixed(1));
+
+    return {
+      capturedAt: new Date(Date.now() - (5 - index) * 6 * 86400000).toISOString(),
+      noteCount,
+      totalConcepts,
+      coveredConcepts,
+      coveragePercentage,
+      edgeCount,
+      strongLinks,
+      inferredLinks,
+      isolatedNotes: Math.max(0, Math.round(current.isolatedNotes * (1.25 - progress * 0.4))),
+      weakNoteCount,
+      formulaCount,
+      notesWithFormulas: Math.max(0, Math.round(current.notesWithFormulas * (0.6 + progress * 0.4))),
+      averageNoteStrength: Number((Math.max(0.4, current.averageNoteStrength * (0.75 + progress * 0.25))).toFixed(1)),
+      flashcardSetCount: Math.max(0, Math.round(current.flashcardSetCount * progress)),
+      flashcardTotalCards: Math.max(0, Math.round(current.flashcardTotalCards * progress)),
+      revisionRunCount: Math.max(0, Math.round(current.revisionRunCount * progress)),
+      latestRevisionItemCount: Math.max(0, Math.round(current.latestRevisionItemCount * (0.7 + progress * 0.3))),
+      aiReadyNotes: Math.max(0, Math.round(current.aiReadyNotes * progress)),
+      aiPendingNotes: Math.max(0, Math.round(current.aiPendingNotes * (1.2 - progress * 0.5))),
+      aiFailedNotes: Math.max(0, Math.round(current.aiFailedNotes * (1.15 - progress * 0.35))),
+      aiStaleNotes: Math.max(0, Math.round(current.aiStaleNotes * (1.15 - progress * 0.45))),
+      aiMissingNotes: Math.max(0, Math.round(current.aiMissingNotes * (1.2 - progress * 0.6))),
+      examAttemptCount,
+      latestExamScore,
+      averageExamScore,
+    };
+  });
+}
+
+function buildStatisticsExamHistory(courseId: string): StatisticsExamPoint[] {
+  const exams = state.examsByCourse[courseId] ?? [];
+  const attempts = exams
+    .flatMap((exam) =>
+      exam.attempts.map((attempt) => ({
+        submittedAt: attempt.submittedAt,
+        examId: exam.id,
+        examTitle: exam.title,
+        scorePercent: attempt.scorePercent,
+        courseId,
+        courseName: state.workspace.courses.find((course) => course.id === courseId)?.name ?? null,
+      })),
+    )
+    .sort((left, right) => left.submittedAt.localeCompare(right.submittedAt));
+
+  if (attempts.length > 0) {
+    return attempts;
+  }
+
+  const courseName = state.workspace.courses.find((course) => course.id === courseId)?.name ?? "Course";
+  return Array.from({ length: 4 }, (_, index) => ({
+    submittedAt: new Date(Date.now() - (3 - index) * 8 * 86400000).toISOString(),
+    examId: `${courseId}-exam-${index + 1}`,
+    examTitle: `${courseName} Check ${index + 1}`,
+    scorePercent: 58 + index * 9,
+    courseId,
+    courseName,
+  }));
+}
+
+function buildVaultExamHistory(): StatisticsExamPoint[] {
+  return state.workspace.courses
+    .flatMap((course) => buildStatisticsExamHistory(course.id))
+    .sort((left, right) => left.submittedAt.localeCompare(right.submittedAt));
+}
+
+function buildStatisticsActivityBuckets(courseId?: string): VaultActivityBucket[] {
+  const noteCount = courseId
+    ? (state.notesByCourse[courseId] ?? []).length
+    : Object.values(state.notesByCourse).reduce((sum, notes) => sum + notes.length, 0);
+  const recent = Math.max(1, Math.round(noteCount * (courseId ? 0.28 : 0.22)));
+  const medium = Math.max(0, Math.round(noteCount * (courseId ? 0.32 : 0.3)));
+  const stale = Math.max(0, Math.round(noteCount * (courseId ? 0.22 : 0.25)));
+  const old = Math.max(0, Math.round(noteCount * (courseId ? 0.12 : 0.17)));
+  const assigned = recent + medium + stale + old;
+  const unknown = Math.max(0, noteCount - assigned);
+
+  return [
+    { label: "0-7 days", noteCount: recent },
+    { label: "8-30 days", noteCount: medium },
+    { label: "31-90 days", noteCount: stale },
+    { label: "90+ days", noteCount: old },
+    { label: "Unknown", noteCount: unknown },
+  ];
+}
+
+function buildAverageScore(points: StatisticsExamPoint[]) {
+  if (points.length === 0) {
+    return null;
+  }
+
+  return Number((points.reduce((sum, point) => sum + point.scorePercent, 0) / points.length).toFixed(1));
+}
+
+function buildStatisticsNoteRows(courseId?: string): StatisticsNoteRow[] {
+  const courseIds = courseId ? [courseId] : state.workspace.courses.map((course) => course.id);
+  const rows = courseIds.flatMap((id) => {
+    const course = state.workspace.courses.find((entry) => entry.id === id);
+    const notes = state.notesByCourse[id] ?? [];
+    return notes.map((note, index) => ({
+      noteId: note.id,
+      title: note.title,
+      relativePath: note.relativePath,
+      courseId: id,
+      courseName: course?.name ?? null,
+      aiStatus: note.aiStatus,
+      strength: Number((3.8 - index * 0.42).toFixed(1)),
+      linkCount: note.links.length,
+      conceptCount: note.concepts.length,
+      formulaCount: note.formulas.length,
+      modifiedAt: new Date(Date.now() - (index + 1) * 5 * 86400000).toISOString(),
+    }));
+  });
+  return rows.sort((left, right) => (right.modifiedAt ?? "").localeCompare(left.modifiedAt ?? ""));
+}
+
+function buildAttemptHistory(examHistory: StatisticsExamPoint[]): StatisticsValuePoint[] {
+  const grouped = new Map<string, number>();
+  for (const point of examHistory) {
+    const label = point.submittedAt.slice(0, 10);
+    grouped.set(label, (grouped.get(label) ?? 0) + 1);
+  }
+  return Array.from(grouped.entries()).map(([label, count]) => ({ label, value: count }));
+}
+
+function buildVerdictMix(courseId?: string): StatisticsCountBucket[] {
+  const attempts = (courseId ? state.examsByCourse[courseId] ?? [] : Object.values(state.examsByCourse).flat()).flatMap(
+    (exam) => exam.attempts,
+  );
+  const correct = attempts.reduce((sum, attempt) => sum + attempt.correctCount, 0);
+  const partial = attempts.reduce((sum, attempt) => sum + attempt.partialCount, 0);
+  const incorrect = attempts.reduce((sum, attempt) => sum + attempt.incorrectCount, 0);
+  return [
+    { label: "Correct", count: correct },
+    { label: "Partial", count: partial },
+    { label: "Incorrect", count: incorrect },
+  ];
+}
+
+function buildMasteryDistribution(courseId?: string): StatisticsCountBucket[] {
+  const noteIds = courseId
+    ? (state.notesByCourse[courseId] ?? []).map((note) => note.id)
+    : Object.values(state.notesByCourse).flat().map((note) => note.id);
+  const active = noteIds.filter((id) => (state.noteMastery[id] ?? "active") === "active").length;
+  const review = noteIds.filter((id) => (state.noteMastery[id] ?? "active") === "review").length;
+  const mastered = noteIds.filter((id) => (state.noteMastery[id] ?? "active") === "mastered").length;
+  return [
+    { label: "Active", count: active },
+    { label: "Review", count: review },
+    { label: "Mastered", count: mastered },
+  ];
+}
+
+function buildAiBreakdown(summary: StatisticsOverview): StatisticsCountBucket[] {
+  return [
+    { label: "Ready", count: summary.aiReadyNotes },
+    { label: "Queued", count: summary.aiPendingNotes },
+    { label: "Failed", count: summary.aiFailedNotes },
+    { label: "Stale", count: summary.aiStaleNotes },
+    { label: "Missing", count: summary.aiMissingNotes },
+  ];
+}
+
+function buildOverviewHighlights(courseRows: StatisticsResponse["overview"]["courseRows"], gitRows: GitCourseActivityRow[]) {
+  const highlights = [];
+  const strongest = [...courseRows].sort((left, right) => right.coveragePercentage - left.coveragePercentage)[0];
+  if (strongest) {
+    highlights.push({
+      label: "Strongest coverage",
+      value: `${strongest.courseName} ${strongest.coveragePercentage}%`,
+      tone: "success",
+    });
+  }
+  const fragile = [...courseRows].sort((left, right) => right.weakNoteCount - left.weakNoteCount)[0];
+  if (fragile) {
+    highlights.push({
+      label: "Most fragile course",
+      value: `${fragile.courseName} ${fragile.weakNoteCount} weak notes`,
+      tone: "warning",
+    });
+  }
+  const edited = gitRows[0];
+  if (edited) {
+    highlights.push({
+      label: "Most edited course",
+      value: `${edited.courseName} ${edited.commitCount} commits`,
+      tone: "accent",
+    });
+  }
+  return highlights;
+}
+
+function buildStrengthBuckets(noteRows: StatisticsNoteRow[]): StatisticsCountBucket[] {
+  return [
+    { label: "Fragile", count: noteRows.filter((note) => note.strength < 1.5).length },
+    { label: "Developing", count: noteRows.filter((note) => note.strength >= 1.5 && note.strength < 3).length },
+    { label: "Stable", count: noteRows.filter((note) => note.strength >= 3 && note.strength < 5).length },
+    { label: "Dense", count: noteRows.filter((note) => note.strength >= 5).length },
+  ];
+}
+
+function buildFormulaDensityBuckets(noteRows: StatisticsNoteRow[]): StatisticsCountBucket[] {
+  return [
+    { label: "0 formulas", count: noteRows.filter((note) => note.formulaCount === 0).length },
+    { label: "1 formula", count: noteRows.filter((note) => note.formulaCount === 1).length },
+    { label: "2 formulas", count: noteRows.filter((note) => note.formulaCount === 2).length },
+    { label: "3+ formulas", count: noteRows.filter((note) => note.formulaCount >= 3).length },
+  ];
+}
+
+function buildMockGitAnalytics(scope: StatisticsScope, courseId?: string): StatisticsResponse["git"] {
+  const courseRows: GitCourseActivityRow[] = state.workspace.courses.map((course, index) => ({
+    courseId: course.id,
+    courseName: course.name,
+    folder: course.folder,
+    commitCount: 6 + index * 3,
+    changedNotes: 12 + index * 4,
+    lastCommitAt: new Date(Date.now() - index * 3 * 86400000).toISOString(),
+  }));
+  const filteredCourseRows =
+    scope === "course" && courseId ? courseRows.filter((row) => row.courseId === courseId) : courseRows;
+  const noteRows = buildStatisticsNoteRows(courseId).slice(0, 10).map((note, index) => ({
+    noteId: note.noteId,
+    title: note.title,
+    relativePath: note.relativePath,
+    courseId: note.courseId,
+    courseName: note.courseName,
+    changeCount: 10 - index,
+    lastCommitAt: new Date(Date.now() - index * 2 * 86400000).toISOString(),
+  }));
+  const timeline: GitTimelinePoint[] = Array.from({ length: 8 }, (_, index) => ({
+    bucket: new Date(Date.now() - (7 - index) * 30 * 86400000).toISOString().slice(0, 7),
+    commitCount: 3 + index,
+    changedNotes: 5 + index * 2,
+  }));
+  return {
+    summary: {
+      repoRoot: `${state.workspace.vault?.vaultPath ?? PREVIEW_VAULT_PATH}\\.git`,
+      totalMarkdownCommits: timeline.reduce((sum, point) => sum + point.commitCount, 0),
+      totalMarkdownFileChanges: timeline.reduce((sum, point) => sum + point.changedNotes, 0),
+      lastCommitAt: new Date().toISOString(),
+      recentCommitCount: 9,
+      activeDays30: 12,
+    },
+    commitTimeline: timeline,
+    churnTimeline: timeline.map((point) => ({ ...point, changedNotes: point.changedNotes + 2 })),
+    courseActivity: filteredCourseRows,
+    topNotes: noteRows,
+    recentCommits: Array.from({ length: 6 }, (_, index) => ({
+      sha: `preview-${index + 1}`,
+      summary: `Refined study notes batch ${index + 1}`,
+      authorName: "Preview User",
+      committedAt: new Date(Date.now() - index * 3 * 86400000).toISOString(),
+      changedNotes: 2 + index,
+    })),
   };
 }
 

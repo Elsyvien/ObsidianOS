@@ -1,4 +1,4 @@
-import { ArrowRight, Download, ExternalLink, Github, MonitorDown, NotebookTabs } from "lucide-react";
+import { ArrowRight, Download, Github, MonitorDown, NotebookTabs } from "lucide-react";
 import { BrandMark } from "../components/BrandMark";
 import {
   FAQ_ITEMS,
@@ -12,128 +12,88 @@ import {
 } from "./content";
 import "./LandingPage.css";
 
-const brandLogoUrl = `${import.meta.env.BASE_URL}obsidianos-logo.svg`;
-
 export function LandingPage() {
   return (
-    <div className="landing-shell" id="top">
-      <header className="landing-topbar">
-        <a className="landing-brand" href="#top">
-          <img alt="ObsidianOS logo" className="landing-brand__image" src={brandLogoUrl} />
-          <span className="landing-brand__copy">
-            <strong>ObsidianOS</strong>
-            <span>Desktop study workstation for Obsidian vaults</span>
-          </span>
-        </a>
+    <div className="premium-layout" id="top">
+      <nav className="premium-nav">
+        <div className="premium-nav__container">
+          <a className="premium-nav__brand" href="#top">
+            <BrandMark className="premium-nav__logo" />
+            <span>ObsidianOS</span>
+          </a>
 
-        <nav aria-label="Primary" className="landing-nav">
-          {LANDING_NAV.map((item) => (
-            <a key={item.id} href={`#${item.id}`}>
-              {item.label}
+          <div className="premium-nav__links">
+            {LANDING_NAV.map((item) => (
+              <a key={item.id} href={`#${item.id}`}>
+                {item.label}
+              </a>
+            ))}
+          </div>
+
+          <div className="premium-nav__actions">
+            <a className="premium-button premium-button--small" href={HERO_CTAS[0].href} target="_blank" rel="noreferrer">
+              Download
             </a>
-          ))}
-        </nav>
+          </div>
+        </div>
+      </nav>
 
-        <a className="landing-inline-cta" href={HERO_CTAS[0].href} rel="noreferrer" target="_blank">
-          <Download size={16} strokeWidth={1.8} />
-          Download
-        </a>
-      </header>
+      <main>
+        <section className="premium-hero">
+          <div className="premium-hero__bg">
+            <div className="glow glow--left" />
+            <div className="glow glow--right" />
+          </div>
 
-      <main className="landing-main">
-        <section className="landing-hero">
-          <div className="landing-hero__copy">
-            <span className="landing-kicker">Study workstation</span>
-            <h1>Turn an Obsidian vault into an exam system, not just a note archive.</h1>
-            <p className="landing-lead">
-              ObsidianOS scans course folders, builds a local graph, surfaces weak links, extracts formulas,
-              generates flashcards, and writes revision notes back into the vault. This website is the product
-              page. The app itself stays a Windows desktop client.
+          <div className="premium-hero__content">
+            <div className="premium-hero__pill">
+              <span className="premium-hero__pill-dot" />
+              Windows Desktop Exclusive
+            </div>
+            
+            <h1 className="premium-hero__title">
+              Your vault is now <br/> an exam system.
+            </h1>
+            
+            <p className="premium-hero__subtitle">
+              ObsidianOS scans course folders, builds a local graph, surfaces weak links, extracts formulas, generates flashcards, and writes revision notes back.
             </p>
 
-            <div className="landing-pillars" aria-label="Product highlights">
+            <div className="premium-hero__actions">
+              <a className="premium-button premium-button--primary" href={HERO_CTAS[0].href} target="_blank" rel="noreferrer">
+                <Download size={18} strokeWidth={2} />
+                <span>Get obsidianOS</span>
+              </a>
+              <a className="premium-button premium-button--secondary" href={HERO_CTAS[1].href} target="_blank" rel="noreferrer">
+                <Github size={18} strokeWidth={2} />
+                <span>Source code</span>
+              </a>
+            </div>
+
+            <div className="premium-hero__metrics">
               {HERO_PILLARS.map((pillar) => (
                 <span key={pillar}>{pillar}</span>
               ))}
             </div>
-
-            <div className="landing-cta-row">
-              {HERO_CTAS.map((cta) => (
-                <a
-                  key={cta.label}
-                  className={`landing-button landing-button--${cta.variant}`}
-                  href={cta.href}
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  <span>{cta.label}</span>
-                  {cta.variant === "primary" ? <ArrowRight size={18} strokeWidth={1.8} /> : <ExternalLink size={16} strokeWidth={1.8} />}
-                  <small>{cta.note}</small>
-                </a>
-              ))}
-            </div>
           </div>
-
-          <aside className="landing-hero__panel" aria-label="Product summary">
-            <div className="hero-desk hero-desk--large">
-              <div className="hero-desk__header">
-                <span>Current desktop loop</span>
-                <strong>ObsidianOS</strong>
-              </div>
-
-              <div className="hero-desk__metrics">
-                <MetricCard label="Scan pass" value="Markdown to graph" />
-                <MetricCard label="Weak notes" value="Graph gaps surfaced" />
-                <MetricCard label="Outputs" value="Flashcards and revision" />
-              </div>
-
-              <div className="hero-desk__rail">
-                <div className="hero-desk__note">
-                  <span>Vault</span>
-                  <strong>One connected workspace</strong>
-                  <p>Top-level folders become course spaces. The desktop app stays in charge of file access and writes.</p>
-                </div>
-                <div className="hero-desk__stack">
-                  <span>Prep loop</span>
-                  <ol>
-                    <li>Scan the vault</li>
-                    <li>Review weak links</li>
-                    <li>Generate study outputs</li>
-                    <li>Run exam prep</li>
-                  </ol>
-                </div>
-              </div>
-            </div>
-
-            <div className="landing-proof">
-              <div>
-                <MonitorDown size={18} strokeWidth={1.7} />
-                <strong>Windows desktop</strong>
-                <span>Website for marketing. App for work.</span>
-              </div>
-              <div>
-                <NotebookTabs size={18} strokeWidth={1.7} />
-                <strong>Vault-native outputs</strong>
-                <span>Revision notes and flashcards stay tied to the source vault.</span>
-              </div>
-            </div>
-          </aside>
         </section>
 
-        <section className="landing-section" id="features">
-          <SectionHeading
-            eyebrow="Feature overview"
-            title="A study system built around note structure, recall, and exam pressure."
-            description="The public page stays static, but the product story is grounded in the actual desktop features already in this repository."
-          />
-          <div className="feature-grid">
-            {FEATURE_CARDS.map((feature) => (
-              <article key={feature.title} className="feature-card">
-                <span>{feature.eyebrow}</span>
-                <h2>{feature.title}</h2>
+        <section className="premium-section" id="features">
+          <div className="premium-section__header">
+            <h2>Designed for recall.</h2>
+            <p>An intelligent study system built around note structure and exam pressure.</p>
+          </div>
+
+          <div className="bento-grid">
+            {FEATURE_CARDS.map((feature, idx) => (
+              <article key={feature.title} className={`premium-card bento-item--${idx}`}>
+                <div className="premium-card__icon">
+                   {idx === 0 ? <MonitorDown size={24} /> : idx === 1 ? <NotebookTabs size={24} /> : <ArrowRight size={24} />}
+                </div>
+                <h3>{feature.title}</h3>
                 <p>{feature.description}</p>
-                <ul>
-                  {feature.bullets.map((bullet) => (
+                <ul className="premium-card__list">
+                  {feature.bullets.slice(0, 3).map((bullet) => (
                     <li key={bullet}>{bullet}</li>
                   ))}
                 </ul>
@@ -142,143 +102,101 @@ export function LandingPage() {
           </div>
         </section>
 
-        <section className="landing-section landing-section--workflow" id="workflow">
-          <SectionHeading
-            eyebrow="Workflow"
-            title="Start from a vault, end with a repeatable revision loop."
-            description="The sequence mirrors the desktop product flow instead of pretending there is a web app behind this page."
-          />
-          <div className="workflow-list">
-            {WORKFLOW_STEPS.map((step) => (
-              <article key={step.id} className="workflow-card">
-                <div className="workflow-card__id">
-                  <span>{step.label}</span>
-                  <strong>{step.id}</strong>
-                </div>
-                <div className="workflow-card__body">
-                  <h2>{step.title}</h2>
+        <section className="premium-section premium-section--alternate" id="workflow">
+          <div className="premium-section__header">
+            <h2>Seamless workflow.</h2>
+            <p>Start from a vault, end with a repeatable revision loop.</p>
+          </div>
+
+          <div className="workflow-track">
+            {WORKFLOW_STEPS.map((step, idx) => (
+              <div key={step.id} className="workflow-step premium-card">
+                <div className="workflow-step__number">0{idx + 1}</div>
+                <div className="workflow-step__content">
+                  <h3>{step.title}</h3>
                   <p>{step.description}</p>
-                  <small>{step.outcome}</small>
+                  <span className="workflow-step__outcome">{step.outcome}</span>
                 </div>
-              </article>
+              </div>
             ))}
           </div>
         </section>
 
-        <section className="landing-section" id="showcase">
-          <SectionHeading
-            eyebrow="Showcase"
-            title="Static captures from the current browser-preview UI."
-            description="These are framed showcase slices of the real mock interface, used here as screenshots rather than as the public product experience."
-          />
-          <div className="showcase-grid">
+        <section className="premium-section" id="showcase">
+          <div className="premium-section__header">
+            <h2>The Workspace.</h2>
+            <p>Static captures from the current browser-preview UI.</p>
+          </div>
+
+          <div className="showcase-gallery">
             {SHOWCASE_ITEMS.map((item) => (
-              <article key={item.title} className="showcase-card">
-                <div className="showcase-card__frame">
+              <div key={item.title} className="showcase-item premium-card">
+                <div className="showcase-item__image">
                   <img alt={item.alt} src={item.imageSrc} />
                 </div>
-                <div className="showcase-card__copy">
-                  <span>{item.imageLabel}</span>
-                  <h2>{item.title}</h2>
+                <div className="showcase-item__caption">
+                  <h4>{item.title}</h4>
                   <p>{item.description}</p>
                 </div>
-              </article>
+              </div>
             ))}
           </div>
         </section>
 
-        <section className="landing-section landing-section--scope" id="scope">
-          <SectionHeading
-            eyebrow="Current scope"
-            title="The README and the page say the same thing."
-            description="Keep the claims tight: this is a Windows desktop study tool for Obsidian workflows, not a hosted browser application."
-          />
-          <div className="scope-layout">
-            <div className="scope-card">
-              <span>What this page is</span>
-              <h2>Marketing and download surface</h2>
+        <section className="premium-section" id="scope">
+          <div className="premium-section__header">
+            <h2>Under the hood.</h2>
+            <p>What it is, and what it isn't.</p>
+          </div>
+
+          <div className="bento-grid bento-grid--faq">
+            <div className="premium-card bento-item--hero">
+              <span className="premium-card__eyebrow">Architecture</span>
+              <h3>Marketing and download surface</h3>
               <p>
                 The browser build exists so the project can live on GitHub Pages under <code>/ObsidianOS/</code>.
                 Downloads, docs, and screenshots live here. Real vault access and file writes stay in the desktop app.
               </p>
             </div>
-
-            <div className="faq-list">
-              {FAQ_ITEMS.map((item) => (
-                <article key={item.question} className="faq-card">
-                  <h2>{item.question}</h2>
-                  <p>{item.answer}</p>
-                </article>
-              ))}
-            </div>
+            {FAQ_ITEMS.map((item) => (
+              <div key={item.question} className="premium-card">
+                <h3>{item.question}</h3>
+                <p className="text-secondary">{item.answer}</p>
+              </div>
+            ))}
           </div>
         </section>
 
-        <section className="landing-download" id="download">
-          <div className="landing-download__copy">
-            <span>Download</span>
-            <h2>Use the landing page in the browser. Use ObsidianOS on Windows.</h2>
-            <p>
-              The GitHub Pages deployment stays static and subpath-safe. The GitHub Releases page stays the main
-              delivery point for the actual desktop build.
-            </p>
-          </div>
-
-          <div className="landing-download__actions">
-            <a className="landing-button landing-button--primary" href={HERO_CTAS[0].href} rel="noreferrer" target="_blank">
-              <span>Open GitHub Releases</span>
-              <ArrowRight size={18} strokeWidth={1.8} />
-              <small>Windows download path</small>
-            </a>
-            <a className="landing-button landing-button--secondary" href={HERO_CTAS[1].href} rel="noreferrer" target="_blank">
-              <span>Browse the source</span>
-              <Github size={16} strokeWidth={1.8} />
-              <small>Repo, issues, roadmap</small>
-            </a>
+        <section className="premium-cta">
+          <div className="premium-cta__content">
+            <h2>Ready to upgrade your study system?</h2>
+            <p>The GitHub Releases page is the main delivery point for the actual desktop build.</p>
+            <div className="premium-cta__actions">
+              <a className="premium-button premium-button--white" href={HERO_CTAS[0].href} target="_blank" rel="noreferrer">
+                Download for Windows
+              </a>
+            </div>
           </div>
         </section>
       </main>
 
-      <footer className="landing-footer">
-        <div className="landing-footer__brand">
-          <BrandMark className="landing-footer__mark" />
-          <p>ObsidianOS keeps the browser build as a product page and the Tauri runtime as the actual workspace.</p>
-        </div>
-        <div className="landing-footer__links">
-          {FOOTER_LINKS.map((link) => (
-            <a key={link.label} href={link.href} rel="noreferrer" target="_blank">
-              {link.label}
-            </a>
-          ))}
+      <footer className="premium-footer">
+        <div className="premium-footer__content">
+          <div className="premium-footer__brand">
+            <BrandMark className="premium-footer__logo" />
+            <span className="premium-footer__copyright">
+              © {new Date().getFullYear()} ObsidianOS
+            </span>
+          </div>
+          <div className="premium-footer__links">
+            {FOOTER_LINKS.map((link) => (
+              <a key={link.label} href={link.href} target="_blank" rel="noreferrer">
+                {link.label}
+              </a>
+            ))}
+          </div>
         </div>
       </footer>
-    </div>
-  );
-}
-
-function SectionHeading({
-  eyebrow,
-  title,
-  description,
-}: {
-  eyebrow: string;
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="section-heading">
-      <span>{eyebrow}</span>
-      <h2>{title}</h2>
-      <p>{description}</p>
-    </div>
-  );
-}
-
-function MetricCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
     </div>
   );
 }

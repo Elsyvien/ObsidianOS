@@ -38,6 +38,8 @@ export function Topbar({
     switch (activeView) {
       case "overview":
         return selectedCourse?.name ?? "Study workspace";
+      case "statistics":
+        return selectedCourse ? `${selectedCourse.name} statistics` : "Vault statistics";
       case "notes":
         return selectedCourse ? `${selectedCourse.name} notes` : "Notes";
       case "formulas":

@@ -686,6 +686,124 @@ code {
   gap: 16px;
 }
 
+.stats-chart-frame {
+  min-height: 260px;
+  padding-top: 10px;
+}
+
+.stats-hero {
+  gap: 18px;
+}
+
+.stats-header-row,
+.stats-section-tabs,
+.stats-header-meta,
+.stats-highlight-grid,
+.stats-mini-row,
+.stats-list-row,
+.stats-list-meta {
+  display: flex;
+}
+
+.stats-header-row {
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.stats-section-tabs {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stats-section-tab {
+  min-height: 36px;
+}
+
+.stats-section-tab--active {
+  border-color: rgba(121, 187, 255, 0.28);
+  background: linear-gradient(180deg, rgba(121, 187, 255, 0.18) 0%, rgba(121, 187, 255, 0.08) 100%);
+}
+
+.stats-header-meta {
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.stats-inline-note {
+  margin: 0;
+  color: var(--warning);
+}
+
+.stats-highlight-grid {
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.stats-highlight-card,
+.stats-mini-row,
+.stats-list-row {
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(121, 187, 255, 0.05) 0%, rgba(255, 255, 255, 0.015) 100%);
+}
+
+.stats-highlight-card {
+  min-width: 180px;
+  flex: 1 1 180px;
+  display: grid;
+  gap: 8px;
+}
+
+.stats-highlight-card span,
+.stats-mini-row span,
+.stats-list-row span {
+  color: var(--muted);
+}
+
+.stats-highlight-card strong,
+.stats-mini-row strong,
+.stats-list-row strong {
+  color: var(--text);
+}
+
+.stats-mini-list,
+.stats-list {
+  display: grid;
+  gap: 10px;
+}
+
+.stats-mini-row,
+.stats-list-row {
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+}
+
+.stats-list-row > div:first-child {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.stats-list-meta {
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  color: var(--text-soft);
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.surface--triptych {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+}
+
 .metric {
   min-width: 140px;
   flex: 1 1 140px;
@@ -1819,6 +1937,7 @@ code {
   }
 
   .surface--split,
+  .surface--triptych,
   .definition-grid,
   .inspector-grid,
   .row-item,
@@ -1847,6 +1966,10 @@ code {
   }
 
   .row-item__meta {
+    justify-content: flex-start;
+  }
+
+  .stats-list-meta {
     justify-content: flex-start;
   }
 }

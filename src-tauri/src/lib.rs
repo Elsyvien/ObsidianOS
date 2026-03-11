@@ -15,8 +15,8 @@ use models::{
     DashboardData, ExamAttemptResult, ExamBuilderInput, ExamDetails, ExamSubmissionRequest,
     ExamWorkspaceSnapshot, FlashcardGenerationRequest, FlashcardGenerationResult, FormulaBrief,
     FormulaDetails, FormulaWorkspaceSnapshot, GenerateFormulaBriefRequest, NoteDetails,
-    RevisionNoteRequest, RevisionNoteResult, ScanReport, SendChatMessageRequest, ValidationResult,
-    WorkspaceSnapshot,
+    RevisionNoteRequest, RevisionNoteResult, ScanReport, SendChatMessageRequest,
+    StatisticsResponse, StatisticsScope, ValidationResult, WorkspaceSnapshot,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -148,6 +148,20 @@ async fn get_dashboard(
     blocking(move || {
         let database = Database::open(&state.db_path)?;
         database.get_dashboard(course_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_statistics(
+    scope: StatisticsScope,
+    course_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Option<StatisticsResponse>, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.get_statistics(scope, course_id)
     })
     .await
 }
@@ -612,6 +626,7 @@ pub fn run() {
             delete_course,
             run_scan,
             get_dashboard,
+            get_statistics,
             get_note_details,
             generate_note_ai_insight,
             start_ai_enrichment,
