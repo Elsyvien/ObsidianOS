@@ -8,6 +8,10 @@ const pagesBase = "/ObsidianOS/";
 // https://vite.dev/config/
 export default defineConfig(async ({ mode }) => ({
   base: mode === "tauri" ? "./" : pagesBase,
+  build: {
+    outDir: mode === "tauri" ? "dist" : "landing",
+    emptyOutDir: true,
+  },
   plugins: [react()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
