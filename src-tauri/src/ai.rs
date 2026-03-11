@@ -2,6 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::blocking::RequestBuilder;
 use reqwest::header::ACCEPT;
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -137,6 +138,23 @@ pub struct ChatAnswerPayload {
     pub citation_ids: Vec<String>,
     pub used_fallback: bool,
     pub fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderErrorEnvelope {
+    error: Option<ProviderErrorBody>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderErrorBody {
+    message: Option<String>,
+    metadata: Option<ProviderErrorMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderErrorMetadata {
+    raw: Option<String>,
+    provider_name: Option<String>,
 }
 
 pub fn validate_settings(settings: &AiProviderSettings) -> Result<String> {
@@ -599,7 +617,7 @@ fn send_chat_request(settings: &AiProviderSettings, payload: Value) -> Result<Va
         .trim()
         .to_string();
     if !status.is_success() {
-        return Err(anyhow!("provider rejected request ({status}): {body}"));
+        return Err(anyhow!("{}", format_provider_rejection(status, &body)));
     }
 
     serde_json::from_slice(body_bytes.as_ref()).with_context(|| {
@@ -645,6 +663,55 @@ where
                 })
         })
         .context("AI response was not valid JSON")
+}
+
+fn format_provider_rejection(status: StatusCode, body: &str) -> String {
+    let preview = body.chars().take(320).collect::<String>();
+    let parsed = serde_json::from_str::<ProviderErrorEnvelope>(body).ok();
+    let provider_name = parsed
+        .as_ref()
+        .and_then(|envelope| envelope.error.as_ref())
+        .and_then(|error| error.metadata.as_ref())
+        .and_then(|metadata| metadata.provider_name.as_deref())
+        .map(normalize_error_text)
+        .filter(|value| !value.is_empty());
+    let detail = parsed
+        .as_ref()
+        .and_then(|envelope| envelope.error.as_ref())
+        .and_then(|error| {
+            error
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.raw.as_deref())
+                .or_else(|| error.message.as_deref())
+        })
+        .map(normalize_error_text)
+        .filter(|value| !value.is_empty() && value != "Provider returned error");
+
+    match status {
+        StatusCode::TOO_MANY_REQUESTS => {
+            let lead = provider_name
+                .map(|name| format!("{name} rate-limited this request."))
+                .unwrap_or_else(|| {
+                    "The AI provider rate-limited this request. Retry shortly.".to_string()
+                });
+            match detail {
+                Some(detail) => format!("{lead} {detail}"),
+                None => lead,
+            }
+        }
+        _ => match detail {
+            Some(detail) => match provider_name {
+                Some(name) => format!("{name} rejected the request ({status}). {detail}"),
+                None => format!("Provider rejected the request ({status}). {detail}"),
+            },
+            None => format!("Provider rejected the request ({status}). {preview}"),
+        },
+    }
+}
+
+fn normalize_error_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn with_optional_bearer(request: RequestBuilder, api_key: &str) -> RequestBuilder {
@@ -1271,14 +1338,16 @@ struct FlashcardEnvelope {
 #[cfg(test)]
 mod tests {
     use super::{
-        answer_chat_query, extract_json_object, generate_exam, generate_formula_brief,
-        grade_exam_attempt, message_content, parse_json_blob, AiProviderSettings,
+        answer_chat_query, extract_json_object, format_provider_rejection, generate_exam,
+        generate_formula_brief, grade_exam_attempt, message_content, parse_json_blob,
+        AiProviderSettings,
         ChatContextChunkInput, ExamGenerationNoteInput, ExamGradingQuestionInput,
     };
     use crate::models::{
         ChatMessageRole, ChatScope, ExamAnswerValue, ExamBuilderInput, ExamDifficulty, ExamPreset,
         ExamQuestionType, ExamVerdict,
     };
+    use reqwest::StatusCode;
     use serde::Deserialize;
     use serde_json::json;
 
@@ -1328,6 +1397,19 @@ mod tests {
 
         let content = message_content(&response).expect("content");
         assert_eq!(content, "line one\nline two");
+    }
+
+    #[test]
+    fn formats_provider_rate_limit_errors_without_raw_json_blob() {
+        let message = format_provider_rejection(
+            StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"message":"Provider returned error","metadata":{"raw":"mistralai/mistral-small-3.1-24b-instruct:free is temporarily rate-limited upstream. Please retry shortly.","provider_name":"Venice"}}}"#,
+        );
+
+        assert_eq!(
+            message,
+            "Venice rate-limited this request. mistralai/mistral-small-3.1-24b-instruct:free is temporarily rate-limited upstream. Please retry shortly."
+        );
     }
 
     #[test]

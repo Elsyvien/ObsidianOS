@@ -104,13 +104,56 @@ export function shortenPath(path: string) {
 }
 
 export function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "Unexpected runtime error.";
+
+  return prettifyErrorMessage(message);
+}
+
+function prettifyErrorMessage(message: string) {
+  const normalized = message.replace(/\s+/g, " ").trim();
+  const providerMatch = normalized.match(/^provider rejected request \(([^)]+)\):\s*(.+)$/i);
+
+  if (providerMatch) {
+    const [, status, rawPayload] = providerMatch;
+    const parsed = parseProviderErrorPayload(rawPayload);
+    const providerName = parsed?.error?.metadata?.provider_name?.trim();
+    const detail =
+      parsed?.error?.metadata?.raw?.trim() ||
+      parsed?.error?.message?.trim() ||
+      rawPayload.trim();
+    const cleanedDetail = detail.replace(/\s+/g, " ").trim();
+
+    if (status.startsWith("429")) {
+      return providerName
+        ? `${providerName} rate-limited this request. ${cleanedDetail}`
+        : `The AI provider rate-limited this request. ${cleanedDetail}`;
+    }
+
+    return providerName
+      ? `${providerName} rejected the request (${status}). ${cleanedDetail}`
+      : `Provider rejected the request (${status}). ${cleanedDetail}`;
   }
 
-  if (typeof error === "string") {
-    return error;
-  }
+  return normalized;
+}
 
-  return "Unexpected runtime error.";
+function parseProviderErrorPayload(payload: string) {
+  try {
+    return JSON.parse(payload) as {
+      error?: {
+        message?: string;
+        metadata?: {
+          raw?: string;
+          provider_name?: string;
+        };
+      };
+    };
+  } catch {
+    return null;
+  }
 }
