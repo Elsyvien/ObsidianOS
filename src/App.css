@@ -144,7 +144,7 @@ code {
 }
 
 .sidebar__brand {
-  gap: 6px;
+  gap: 0;
 }
 
 .sidebar__brand-lockup,
@@ -204,7 +204,7 @@ code {
 
 .sidebar__brand h1 {
   font-size: 1.45rem;
-  line-height: 1.02;
+  line-height: 1;
   font-weight: 600;
 }
 

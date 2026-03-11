@@ -11,7 +11,7 @@ import {
   Sigma,
   TerminalSquare,
 } from "lucide-react";
-import { formatDate, shortenPath } from "../lib";
+import { formatDate } from "../lib";
 import type { CourseConfig } from "../types";
 import { APP_VIEWS, type AppView } from "./appShell";
 import { BrandMark } from "./BrandMark";
@@ -46,16 +46,12 @@ const CONFIG_VIEWS: AppView[] = ["courses", "settings"];
 
 export function AppSidebar({
   activeView,
-  connected,
   courses,
   logCount,
-  runtimeMode,
   selectedCourseId,
-  vaultPath,
   onChangeView,
   onSelectCourse,
 }: AppSidebarProps) {
-  const isPreview = runtimeMode === "browser-preview";
 
   return (
     <aside className="sidebar">
@@ -63,24 +59,8 @@ export function AppSidebar({
         <div className="sidebar__brand-lockup">
           <BrandMark className="brand-mark brand-mark--sidebar" />
           <div>
-            <span className="sidebar__eyebrow">ObsidianOS</span>
-            <h1>Study workspace</h1>
+            <h1>ObsidianOS</h1>
           </div>
-        </div>
-        <p>One place to scan the vault, review notes, study formulas, chat with the graph, and prepare for the exam.</p>
-      </div>
-
-      <div className="workspace-chip">
-        <span className={`workspace-chip__dot ${connected ? "workspace-chip__dot--active" : ""}`} />
-        <div>
-          <strong>{isPreview ? "Preview runtime" : connected ? "Vault connected" : "Vault offline"}</strong>
-          <p>
-            {isPreview
-              ? "Sample data only. Live scan and file writes run in the desktop app."
-              : connected
-                ? shortenPath(vaultPath)
-                : "Open Setup to connect an Obsidian vault."}
-          </p>
         </div>
       </div>
 
