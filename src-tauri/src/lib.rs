@@ -107,7 +107,7 @@ async fn run_scan(state: State<'_, AppState>) -> Result<RunScanResponse, String>
                 workspace
                     .ai_settings
                     .as_ref()
-                    .map(|settings| settings.enabled && settings.has_api_key)
+                    .map(|settings| settings.enabled)
                     .unwrap_or(false)
             });
 

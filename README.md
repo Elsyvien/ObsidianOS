@@ -51,6 +51,6 @@ C:\Users\maxwi\source\repos\ObsidianVault\MaxVault\Uni
 - One Obsidian vault connected at a time
 - Top-level vault folders imported as course spaces
 - Markdown-only indexing for `.md` notes
-- Local deterministic extraction with optional OpenAI-compatible refinement
+- Local deterministic extraction with optional OpenRouter / OpenAI-compatible refinement
 - Markdown flashcard output plus Anki CSV export
 - Daily revision note generation into the vault

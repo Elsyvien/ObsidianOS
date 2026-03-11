@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
+use reqwest::blocking::RequestBuilder;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -43,19 +44,17 @@ pub fn validate_settings(settings: &AiProviderSettings) -> Result<String> {
     }
 
     ensure_required(settings)?;
-    let client = build_client(settings.timeout_ms)?;
-    let url = endpoint(&settings.base_url, "models");
-    let response = client
-        .get(url)
-        .bearer_auth(&settings.api_key)
-        .send()
-        .context("failed to reach model provider")?;
+    let payload = json!({
+        "model": settings.model,
+        "messages": [
+            { "role": "system", "content": "Reply with OK." },
+            { "role": "user", "content": "OK" }
+        ],
+        "max_tokens": 8,
+        "temperature": 0
+    });
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().unwrap_or_default();
-        return Err(anyhow!("provider rejected validation ({status}): {body}"));
-    }
+    send_chat_request(settings, payload).context("failed to validate AI provider settings")?;
 
     Ok(format!(
         "Validated {} against {}",
@@ -78,7 +77,6 @@ pub fn generate_flashcards(
     let payload = json!({
         "model": settings.model,
         "temperature": 0.2,
-        "response_format": { "type": "json_object" },
         "messages": [
             { "role": "system", "content": "You are a flashcard generator. Return JSON only." },
             { "role": "user", "content": prompt },
@@ -123,7 +121,6 @@ pub fn generate_note_insight(
     let payload = json!({
         "model": settings.model,
         "temperature": 0.2,
-        "response_format": { "type": "json_object" },
         "messages": [
             { "role": "system", "content": "You are an exam study coach. Return JSON only." },
             { "role": "user", "content": prompt }
@@ -160,7 +157,6 @@ pub fn generate_course_brief(
     let payload = json!({
         "model": settings.model,
         "temperature": 0.2,
-        "response_format": { "type": "json_object" },
         "messages": [
             { "role": "system", "content": "You are an exam preparation strategist. Return JSON only." },
             { "role": "user", "content": prompt }
@@ -178,9 +174,6 @@ fn ensure_required(settings: &AiProviderSettings) -> Result<()> {
     }
     if settings.model.trim().is_empty() {
         return Err(anyhow!("model is required"));
-    }
-    if settings.api_key.trim().is_empty() {
-        return Err(anyhow!("API key is required when AI is enabled"));
     }
     Ok(())
 }
@@ -203,9 +196,7 @@ fn endpoint(base_url: &str, suffix: &str) -> String {
 fn send_chat_request(settings: &AiProviderSettings, payload: Value) -> Result<Value> {
     let client = build_client(settings.timeout_ms)?;
     let url = endpoint(&settings.base_url, "chat/completions");
-    let response = client
-        .post(url)
-        .bearer_auth(&settings.api_key)
+    let response = with_optional_bearer(client.post(url), &settings.api_key)
         .json(&payload)
         .send()
         .context("failed to reach chat completions endpoint")?;
@@ -222,11 +213,19 @@ fn send_chat_request(settings: &AiProviderSettings, payload: Value) -> Result<Va
 }
 
 fn message_content(json: &Value) -> Result<String> {
-    let value = json
-        .pointer("/choices/0/message/content")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("provider response did not contain a message content field"))?;
-    Ok(value.to_string())
+    if let Some(value) = json.pointer("/choices/0/message/content") {
+        if let Some(content) = extract_content_text(value) {
+            return Ok(content);
+        }
+    }
+
+    if let Some(value) = json.pointer("/choices/0/text").and_then(Value::as_str) {
+        return Ok(value.trim().to_string());
+    }
+
+    Err(anyhow!(
+        "provider response did not contain readable message content"
+    ))
 }
 
 fn parse_json_blob<T>(content: &str) -> Result<T>
@@ -241,10 +240,161 @@ where
         .and_then(|value| value.strip_suffix("```").map(str::trim))
         .unwrap_or(trimmed);
 
-    serde_json::from_str(cleaned).context("AI response was not valid JSON")
+    serde_json::from_str(cleaned)
+        .or_else(|_| {
+            extract_json_object(cleaned)
+                .ok_or_else(|| anyhow!("AI response was not valid JSON"))
+                .and_then(|value| {
+                    serde_json::from_str(value).context("AI response was not valid JSON")
+                })
+        })
+        .context("AI response was not valid JSON")
+}
+
+fn with_optional_bearer(request: RequestBuilder, api_key: &str) -> RequestBuilder {
+    let trimmed = api_key.trim();
+    if trimmed.is_empty() {
+        request
+    } else {
+        request.bearer_auth(trimmed)
+    }
+}
+
+fn extract_content_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.trim().to_string()),
+        Value::Array(parts) => {
+            let joined = parts
+                .iter()
+                .filter_map(|part| match part {
+                    Value::String(text) => Some(text.trim().to_string()),
+                    Value::Object(map) => map
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(|text| text.trim().to_string()),
+                    _ => None,
+                })
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            if joined.is_empty() {
+                None
+            } else {
+                Some(joined)
+            }
+        }
+        Value::Object(map) => map
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|text| text.trim().to_string()),
+        _ => None,
+    }
+}
+
+fn extract_json_object(content: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    let mut start = None;
+    let mut in_string = false;
+    let mut escape = false;
+
+    for (index, ch) in content.char_indices() {
+        if in_string {
+            if escape {
+                escape = false;
+                continue;
+            }
+
+            match ch {
+                '\\' => escape = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => in_string = true,
+            '{' => {
+                if depth == 0 {
+                    start = Some(index);
+                }
+                depth += 1;
+            }
+            '}' => {
+                if depth == 0 {
+                    continue;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(start_index) = start {
+                        return Some(&content[start_index..=index]);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 #[derive(Debug, Deserialize)]
 struct FlashcardEnvelope {
     cards: Vec<FlashcardCard>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_json_object, message_content, parse_json_blob};
+    use serde::Deserialize;
+    use serde_json::json;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    struct SamplePayload {
+        summary: String,
+    }
+
+    #[test]
+    fn parses_json_inside_code_fence_with_extra_text() {
+        let payload: SamplePayload =
+            parse_json_blob("Here you go:\n```json\n{\"summary\":\"ready\"}\n```\n")
+                .expect("payload");
+        assert_eq!(
+            payload,
+            SamplePayload {
+                summary: "ready".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn extracts_first_balanced_json_object() {
+        let extracted =
+            extract_json_object("noise {\"summary\":\"ready\",\"nested\":{\"ok\":true}} tail")
+                .expect("json object");
+        assert_eq!(
+            extracted,
+            "{\"summary\":\"ready\",\"nested\":{\"ok\":true}}"
+        );
+    }
+
+    #[test]
+    fn reads_message_content_from_content_parts() {
+        let response = json!({
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            { "type": "output_text", "text": "line one" },
+                            { "type": "text", "text": "line two" }
+                        ]
+                    }
+                }
+            ]
+        });
+
+        let content = message_content(&response).expect("content");
+        assert_eq!(content, "line one\nline two");
+    }
 }

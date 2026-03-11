@@ -31,8 +31,8 @@ export const EMPTY_WORKSPACE: WorkspaceSnapshot = {
 };
 
 export const DEFAULT_AI_SETTINGS: AiSettingsInput = {
-  baseUrl: "https://api.openai.com/v1",
-  model: "gpt-4.1-mini",
+  baseUrl: "https://openrouter.ai/api/v1",
+  model: "openrouter/free",
   apiKey: "",
   enabled: false,
   timeoutMs: 30000,

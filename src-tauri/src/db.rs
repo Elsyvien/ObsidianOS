@@ -694,9 +694,9 @@ impl Database {
     }
 
     pub fn generate_note_ai_insight(&self, note_id: &str) -> Result<AiNoteInsight> {
-        let settings = self
-            .ai_settings_for_runtime()?
-            .ok_or_else(|| anyhow!("enable AI in Setup and save a valid API key first"))?;
+        let settings = self.ai_settings_for_runtime()?.ok_or_else(|| {
+            anyhow!("enable AI in Setup and save reachable provider settings first")
+        })?;
         let course_id = self.note_course_id(note_id)?;
 
         let note = self
@@ -805,8 +805,9 @@ impl Database {
     }
 
     pub fn queue_ai_enrichment(&self, course_id: &str, force: bool) -> Result<AiCourseSummary> {
-        self.ai_settings_for_runtime()?
-            .ok_or_else(|| anyhow!("enable AI in Setup and save a valid API key first"))?;
+        self.ai_settings_for_runtime()?.ok_or_else(|| {
+            anyhow!("enable AI in Setup and save reachable provider settings first")
+        })?;
         let course = self
             .find_course(course_id)?
             .ok_or_else(|| anyhow!("course not found"))?;
@@ -866,9 +867,9 @@ impl Database {
     }
 
     pub fn run_ai_enrichment(&self, course_id: &str, force: bool) -> Result<()> {
-        let settings = self
-            .ai_settings_for_runtime()?
-            .ok_or_else(|| anyhow!("enable AI in Setup and save a valid API key first"))?;
+        let settings = self.ai_settings_for_runtime()?.ok_or_else(|| {
+            anyhow!("enable AI in Setup and save reachable provider settings first")
+        })?;
         let course = self
             .find_course(course_id)?
             .ok_or_else(|| anyhow!("course not found"))?;
@@ -1386,11 +1387,10 @@ impl Database {
     fn ai_settings_for_runtime(&self) -> Result<Option<AiProviderSettings>> {
         Ok(self.get_ai_settings_internal()?.and_then(|settings| {
             if settings.enabled {
-                let api_key = resolve_api_key(&settings.api_key)?;
                 Some(AiProviderSettings {
                     base_url: settings.base_url,
                     model: settings.model,
-                    api_key,
+                    api_key: resolve_api_key(&settings.api_key).unwrap_or_default(),
                     enabled: settings.enabled,
                     timeout_ms: settings.timeout_ms,
                 })
@@ -2588,7 +2588,7 @@ fn build_ai_course_summary(
 ) -> AiCourseSummary {
     let counts = compute_ai_status_counts(notes, ai_states);
     let default_status = if let Some(settings) = ai_settings {
-        if settings.enabled && settings.has_api_key {
+        if settings.enabled {
             if counts.pending_notes > 0 {
                 "running"
             } else if counts.ready_notes == counts.total_notes && counts.total_notes > 0 {
@@ -2953,10 +2953,16 @@ fn resolve_api_key(stored: &str) -> Option<String> {
         return Some(trimmed.to_string());
     }
 
-    env::var("OPENAI_API_KEY")
+    env::var("OPENROUTER_API_KEY")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+        .or_else(|| {
+            env::var("OPENAI_API_KEY")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
 }
 
 fn slugify(value: &str) -> String {

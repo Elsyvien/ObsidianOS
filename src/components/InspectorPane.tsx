@@ -333,7 +333,7 @@ export function InspectorPane({
                   </>
                 ) : (
                   <p className="inspector-copy">
-                    Enable AI in Setup and save a valid API key to use the note coach.
+                    Enable AI in Setup and save reachable provider settings to use the note coach.
                   </p>
                 )}
               </InspectorSection>
@@ -465,7 +465,9 @@ export function InspectorPane({
               </button>
             </div>
             <p className="inspector-copy">
-              The app can use a saved key here or a local `OPENAI_API_KEY` environment variable.
+              OpenRouter is the default provider. The app can use a saved key here or local
+              `OPENROUTER_API_KEY` / `OPENAI_API_KEY` environment variables.
+              Some local OpenAI-compatible providers do not need a key at all.
             </p>
           </InspectorSection>
         </>

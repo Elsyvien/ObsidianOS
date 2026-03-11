@@ -424,7 +424,7 @@ export function MainPane({
               description={
                 workspace.aiSettings?.enabled
                   ? "Run AI for this course to create note briefs and a course-level revision summary."
-                  : "Enable AI in Setup and save a valid API key to unlock course enrichment."
+                  : "Enable AI in Setup and save reachable provider settings to unlock course enrichment."
               }
             />
           )}
