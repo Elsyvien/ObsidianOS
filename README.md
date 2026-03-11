@@ -8,7 +8,7 @@ Desktop study workspace for an Obsidian vault. The app scans course folders, ind
 
 ## Landing page
 
-The browser build is a standalone product page emitted into the root `landing/` folder for branch-based GitHub Pages publishing from this repository:
+The browser build is a standalone product page emitted into the root `docs/` folder for branch-based GitHub Pages publishing from this repository:
 
 ```text
 https://elsyvien.github.io/ObsidianOS/
@@ -30,14 +30,14 @@ npm run build
 The generated static files will be written to:
 
 ```text
-landing\
+docs\
 ```
 
 For GitHub Pages, use:
 
 ```text
 Branch: master (or main)
-Folder: /landing
+Folder: /docs
 ```
 
 ## Desktop app

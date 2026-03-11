@@ -9,7 +9,7 @@ const pagesBase = "/ObsidianOS/";
 export default defineConfig(async ({ mode }) => ({
   base: mode === "tauri" ? "./" : pagesBase,
   build: {
-    outDir: mode === "tauri" ? "dist" : "landing",
+    outDir: mode === "tauri" ? "dist" : "docs",
     emptyOutDir: true,
   },
   plugins: [react()],

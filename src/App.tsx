@@ -1300,8 +1300,10 @@ function App() {
         />
         {banner ? (
           <section className={`banner banner--${banner.tone}`}>
-            <strong>{banner.title}</strong>
-            {banner.detail ? <span>{banner.detail}</span> : null}
+            <div className="banner__copy">
+              <strong>{banner.title}</strong>
+              {banner.detail ? <span>{banner.detail}</span> : null}
+            </div>
           </section>
         ) : null}
         <div className={`workspace-body workspace-body--${activeView} ${showInspector ? "workspace-body--with-inspector" : "workspace-body--single"}`}>

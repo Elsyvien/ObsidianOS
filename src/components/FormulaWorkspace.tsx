@@ -308,11 +308,11 @@ function FormulaListRow({
   onSelect: () => void;
 }) {
   return (
-    <article className={`row-item ${isActive ? "row-item--active" : ""}`}>
+    <article className={`row-item formula-list-row ${isActive ? "row-item--active formula-list-row--active" : ""}`}>
       <button className="row-item__main" onClick={onSelect} type="button">
         <div className="row-item__title-row">
           <MathFormula
-            className="line-item__math"
+            className="line-item__math formula-list-row__math"
             latex={formula.latex}
             showSource={false}
             sourceClassName="math-formula__source line-item__title line-item__code"
@@ -333,13 +333,23 @@ function FormulaNoteRow({
   onOpenNote: (noteId: string) => void;
 }) {
   return (
-    <button className="line-item" onClick={() => onOpenNote(note.noteId)} type="button">
+    <button className="line-item formula-note-card" onClick={() => onOpenNote(note.noteId)} type="button">
       <span className="line-item__title">{note.title}</span>
       <span className="line-item__subtitle">{shortenPath(note.relativePath)}</span>
-      <span className="line-item__meta">{note.excerpt}</span>
-      <span className="line-item__meta">
-        {note.headings.join(" · ") || "No headings"} · {note.relatedConcepts.slice(0, 3).join(" · ") || "No concepts"} · {note.formulaCount} formulas
-      </span>
+      <p className="formula-note-card__summary">{formatPreviewText(note.excerpt, 220)}</p>
+      <div className="formula-chip-list">
+        {note.headings.slice(0, 3).map((heading) => (
+          <span key={`${note.noteId}-${heading}`} className="formula-chip">
+            {heading}
+          </span>
+        ))}
+        {note.relatedConcepts.slice(0, 2).map((concept) => (
+          <span key={`${note.noteId}-${concept}`} className="formula-chip formula-chip--muted">
+            {concept}
+          </span>
+        ))}
+      </div>
+      <span className="line-item__meta formula-note-card__meta">{note.formulaCount} formulas in this note</span>
     </button>
   );
 }
@@ -362,7 +372,11 @@ function FormulaChunkCard({
           Open note
         </button>
       </div>
-      <p className="inspector-copy">{chunk.text}</p>
+      <p className="formula-chunk__body">{formatPreviewText(chunk.text, 340)}</p>
+      <div className="formula-chip-list">
+        <span className="formula-chip">{chunk.headingPath}</span>
+        <span className="formula-chip formula-chip--muted">Chunk {chunk.ordinal + 1}</span>
+      </div>
       <span className="line-item__meta">{shortenPath(chunk.relativePath)}</span>
     </article>
   );
@@ -445,4 +459,22 @@ function InsightList({ items, title }: { items: string[]; title: string }) {
 
 function capitalize(value: string) {
   return value.slice(0, 1).toUpperCase() + value.slice(1);
+}
+
+function formatPreviewText(value: string, maxLength: number) {
+  const cleaned = value
+    .replace(/\[\[([^\]]+)\]\]/g, "$1")
+    .replace(/#+\s*/g, "")
+    .replace(/\*\*/g, "")
+    .replace(/__+/g, "")
+    .replace(/\$[^$]+\$/g, " formula ")
+    .replace(/-{3,}/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (cleaned.length <= maxLength) {
+    return cleaned;
+  }
+
+  return `${cleaned.slice(0, maxLength).trim()}...`;
 }
