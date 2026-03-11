@@ -1,9 +1,12 @@
 use anyhow::{anyhow, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::blocking::RequestBuilder;
+use reqwest::header::ACCEPT;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
+
+use crate::models::{ExamAnswerValue, ExamBuilderInput, ExamQuestionType, ExamVerdict};
 
 #[derive(Debug, Clone)]
 pub struct AiProviderSettings {
@@ -38,12 +41,86 @@ pub struct FlashcardCard {
     pub answer: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamGenerationNoteInput {
+    pub note_id: String,
+    pub title: String,
+    pub relative_path: String,
+    pub excerpt: String,
+    pub headings: Vec<String>,
+    pub concepts: Vec<String>,
+    pub formulas: Vec<String>,
+    pub links: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedExamPayload {
+    pub instructions: String,
+    pub summary: String,
+    pub questions: Vec<GeneratedExamQuestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedExamQuestion {
+    #[serde(rename = "type")]
+    pub question_type: ExamQuestionType,
+    pub prompt: String,
+    pub options: Vec<String>,
+    pub correct_answer: String,
+    pub explanation: String,
+    pub source_note_id: String,
+    pub source_note_title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamGradingQuestionInput {
+    pub question_id: String,
+    pub index: usize,
+    #[serde(rename = "type")]
+    pub question_type: ExamQuestionType,
+    pub prompt: String,
+    pub options: Vec<String>,
+    pub source_note_id: String,
+    pub source_note_title: String,
+    pub expected_answer: String,
+    pub explanation: String,
+    pub user_answer: ExamAnswerValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GradedExamPayload {
+    pub overall_feedback: String,
+    pub results: Vec<GradedExamQuestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GradedExamQuestion {
+    pub question_id: String,
+    pub verdict: ExamVerdict,
+    pub expected_answer: String,
+    pub explanation: String,
+    pub feedback: String,
+}
+
 pub fn validate_settings(settings: &AiProviderSettings) -> Result<String> {
     if !settings.enabled {
         return Ok("AI is disabled; local parsing remains active.".to_string());
     }
 
     ensure_required(settings)?;
+    if settings.base_url.starts_with("mock://") {
+        return Ok(format!(
+            "Validated {} against mock AI provider {}",
+            settings.model, settings.base_url
+        ));
+    }
+
     let payload = json!({
         "model": settings.model,
         "messages": [
@@ -168,6 +245,120 @@ pub fn generate_course_brief(
     parse_json_blob::<AiCourseBriefPayload>(&content)
 }
 
+pub fn generate_exam(
+    settings: &AiProviderSettings,
+    course_name: &str,
+    input: &ExamBuilderInput,
+    notes: &[ExamGenerationNoteInput],
+) -> Result<GeneratedExamPayload> {
+    ensure_required(settings)?;
+    if notes.is_empty() {
+        return Err(anyhow!("exam source queue is empty"));
+    }
+    if settings.base_url.starts_with("mock://") {
+        return build_mock_exam(course_name, input, notes);
+    }
+
+    let note_ids = notes
+        .iter()
+        .map(|note| note.note_id.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let notes_payload = notes
+        .iter()
+        .map(|note| {
+            format!(
+                "noteId: {}\ntitle: {}\npath: {}\nheadings: {}\nconcepts: {}\nformulas: {}\nlinks: {}\nexcerpt: {}",
+                note.note_id,
+                note.title,
+                note.relative_path,
+                note.headings.join(" | "),
+                note.concepts.join(", "),
+                note.formulas.join(" | "),
+                note.links.join(", "),
+                note.excerpt
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+
+    let prompt = format!(
+        "Generate a study exam for the course `{course_name}`. Return strict JSON only with keys \
+         `instructions`, `summary`, and `questions`. `questions` must be an array of exactly {} items. \
+         Produce exactly {} `multiple-choice` questions and exactly {} `short-answer` questions. \
+         Every question object must contain `type`, `prompt`, `options`, `correctAnswer`, `explanation`, \
+         `sourceNoteId`, and `sourceNoteTitle`. `sourceNoteId` must be one of [{note_ids}]. \
+         For `multiple-choice`, provide exactly 4 options and make `correctAnswer` match one option exactly. \
+         For `short-answer`, set `options` to an empty array. Difficulty: {:?}. Time limit: {} minutes. \
+         Build the exam only from the provided notes.",
+        input.multiple_choice_count + input.short_answer_count,
+        input.multiple_choice_count,
+        input.short_answer_count,
+        input.difficulty,
+        input.time_limit_minutes
+    );
+
+    let payload = json!({
+        "model": settings.model,
+        "temperature": 0.2,
+        "messages": [
+            { "role": "system", "content": "You generate production-grade exams and return JSON only." },
+            { "role": "user", "content": prompt },
+            { "role": "user", "content": notes_payload }
+        ]
+    });
+
+    let json = send_chat_request(settings, payload)?;
+    let content = message_content(&json)?;
+    let exam: GeneratedExamPayload = parse_json_blob(&content)?;
+    validate_generated_exam(input, notes, exam)
+}
+
+pub fn grade_exam_attempt(
+    settings: &AiProviderSettings,
+    course_name: &str,
+    exam_title: &str,
+    questions: &[ExamGradingQuestionInput],
+) -> Result<GradedExamPayload> {
+    ensure_required(settings)?;
+    if questions.is_empty() {
+        return Err(anyhow!("exam has no questions to grade"));
+    }
+    if settings.base_url.starts_with("mock://") {
+        return Ok(build_mock_grading(course_name, exam_title, questions));
+    }
+
+    let payload = json!({
+        "model": settings.model,
+        "temperature": 0,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are grading a study exam. Return strict JSON only."
+            },
+            {
+                "role": "user",
+                "content": format!(
+                    "Grade the exam `{exam_title}` for the course `{course_name}`. Return strict JSON with keys \
+                     `overallFeedback` and `results`. `results` must contain exactly one item per question. \
+                     Each result must contain `questionId`, `verdict`, `expectedAnswer`, `explanation`, and `feedback`. \
+                     `verdict` must be one of `correct`, `partial`, or `incorrect`. Use the provided expected answer \
+                     and explanation to judge correctness. Preserve the given `questionId` values exactly."
+                )
+            },
+            {
+                "role": "user",
+                "content": serde_json::to_string(questions).context("failed to serialize grading input")?
+            }
+        ]
+    });
+
+    let json = send_chat_request(settings, payload)?;
+    let content = message_content(&json)?;
+    let grading: GradedExamPayload = parse_json_blob(&content)?;
+    validate_grading_payload(questions, grading)
+}
+
 fn ensure_required(settings: &AiProviderSettings) -> Result<()> {
     if settings.base_url.trim().is_empty() {
         return Err(anyhow!("base URL is required"));
@@ -194,22 +385,34 @@ fn endpoint(base_url: &str, suffix: &str) -> String {
 }
 
 fn send_chat_request(settings: &AiProviderSettings, payload: Value) -> Result<Value> {
+    let mut payload = payload;
+    if let Some(object) = payload.as_object_mut() {
+        object
+            .entry("stream".to_string())
+            .or_insert(Value::Bool(false));
+    }
+
     let client = build_client(settings.timeout_ms)?;
     let url = endpoint(&settings.base_url, "chat/completions");
     let response = with_optional_bearer(client.post(url), &settings.api_key)
+        .header(ACCEPT, "application/json")
         .json(&payload)
         .send()
         .context("failed to reach chat completions endpoint")?;
 
     let status = response.status();
-    let body = response
-        .text()
+    let body_bytes = response
+        .bytes()
         .context("failed to read provider response")?;
+    let body = String::from_utf8_lossy(body_bytes.as_ref()).trim().to_string();
     if !status.is_success() {
         return Err(anyhow!("provider rejected request ({status}): {body}"));
     }
 
-    serde_json::from_str(&body).context("provider returned invalid JSON")
+    serde_json::from_slice(body_bytes.as_ref()).with_context(|| {
+        let preview = body.chars().take(320).collect::<String>();
+        format!("provider returned invalid JSON: {preview}")
+    })
 }
 
 fn message_content(json: &Value) -> Result<String> {
@@ -339,6 +542,348 @@ fn extract_json_object(content: &str) -> Option<&str> {
     None
 }
 
+fn validate_generated_exam(
+    input: &ExamBuilderInput,
+    notes: &[ExamGenerationNoteInput],
+    exam: GeneratedExamPayload,
+) -> Result<GeneratedExamPayload> {
+    let expected_total = input.multiple_choice_count + input.short_answer_count;
+    if exam.questions.len() != expected_total {
+        return Err(anyhow!(
+            "AI generated {} questions, expected {}",
+            exam.questions.len(),
+            expected_total
+        ));
+    }
+
+    let valid_note_ids = notes
+        .iter()
+        .map(|note| note.note_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut multiple_choice_count = 0usize;
+    let mut short_answer_count = 0usize;
+
+    for question in &exam.questions {
+        if !valid_note_ids.contains(question.source_note_id.as_str()) {
+            return Err(anyhow!(
+                "AI generated a question for unknown source note {}",
+                question.source_note_id
+            ));
+        }
+        if question.prompt.trim().is_empty() {
+            return Err(anyhow!("AI generated an empty exam question prompt"));
+        }
+        if question.correct_answer.trim().is_empty() {
+            return Err(anyhow!("AI generated an exam question without an answer key"));
+        }
+        if question.explanation.trim().is_empty() {
+            return Err(anyhow!("AI generated an exam question without an explanation"));
+        }
+
+        match question.question_type {
+            ExamQuestionType::MultipleChoice => {
+                multiple_choice_count += 1;
+                if question.options.len() != 4 {
+                    return Err(anyhow!(
+                        "AI generated a multiple-choice question without exactly 4 options"
+                    ));
+                }
+                if !question
+                    .options
+                    .iter()
+                    .any(|option| option.trim() == question.correct_answer.trim())
+                {
+                    return Err(anyhow!(
+                        "AI generated a multiple-choice answer key that is not in the options"
+                    ));
+                }
+            }
+            ExamQuestionType::ShortAnswer => {
+                short_answer_count += 1;
+                if !question.options.is_empty() {
+                    return Err(anyhow!(
+                        "AI generated options for a short-answer exam question"
+                    ));
+                }
+            }
+        }
+    }
+
+    if multiple_choice_count != input.multiple_choice_count {
+        return Err(anyhow!(
+            "AI generated {} multiple-choice questions, expected {}",
+            multiple_choice_count,
+            input.multiple_choice_count
+        ));
+    }
+    if short_answer_count != input.short_answer_count {
+        return Err(anyhow!(
+            "AI generated {} short-answer questions, expected {}",
+            short_answer_count,
+            input.short_answer_count
+        ));
+    }
+
+    Ok(exam)
+}
+
+fn validate_grading_payload(
+    questions: &[ExamGradingQuestionInput],
+    grading: GradedExamPayload,
+) -> Result<GradedExamPayload> {
+    if grading.results.len() != questions.len() {
+        return Err(anyhow!(
+            "AI returned {} grading results for {} questions",
+            grading.results.len(),
+            questions.len()
+        ));
+    }
+
+    let expected_ids = questions
+        .iter()
+        .map(|question| question.question_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+
+    for result in &grading.results {
+        if !expected_ids.contains(result.question_id.as_str()) {
+            return Err(anyhow!(
+                "AI returned grading for unknown question {}",
+                result.question_id
+            ));
+        }
+        if result.expected_answer.trim().is_empty() {
+            return Err(anyhow!("AI grading result omitted the expected answer"));
+        }
+        if result.explanation.trim().is_empty() {
+            return Err(anyhow!("AI grading result omitted the explanation"));
+        }
+        if result.feedback.trim().is_empty() {
+            return Err(anyhow!("AI grading result omitted the feedback"));
+        }
+    }
+
+    Ok(grading)
+}
+
+fn build_mock_exam(
+    course_name: &str,
+    input: &ExamBuilderInput,
+    notes: &[ExamGenerationNoteInput],
+) -> Result<GeneratedExamPayload> {
+    if notes.is_empty() {
+        return Err(anyhow!("exam source queue is empty"));
+    }
+
+    let note_titles = notes.iter().map(|note| note.title.as_str()).collect::<Vec<_>>();
+    let mut questions = Vec::new();
+
+    for index in 0..input.multiple_choice_count {
+        let note = &notes[index % notes.len()];
+        let concept = note
+            .concepts
+            .get(index % note.concepts.len().max(1))
+            .cloned()
+            .unwrap_or_else(|| note.title.clone());
+        let correct_answer = format!("{concept} anchors the note {}.", note.title);
+        let first_alt = note
+            .links
+            .first()
+            .cloned()
+            .unwrap_or_else(|| note_titles.first().copied().unwrap_or("the course graph").to_string());
+        let second_alt = note
+            .headings
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "an unrelated heading".to_string());
+        let third_alt = note_titles
+            .iter()
+            .copied()
+            .find(|title| *title != note.title)
+            .unwrap_or("an unrelated chapter")
+            .to_string();
+
+        questions.push(GeneratedExamQuestion {
+            question_type: ExamQuestionType::MultipleChoice,
+            prompt: format!(
+                "Which statement best matches the role of {concept} in {}?",
+                note.title
+            ),
+            options: vec![
+                correct_answer.clone(),
+                format!("{concept} is disconnected from {first_alt}."),
+                format!("{concept} is only a formatting label from {second_alt}."),
+                format!("{concept} belongs to {third_alt} instead of {}.", note.title),
+            ],
+            correct_answer,
+            explanation: format!(
+                "{} frames {concept} as part of the note's core recall target.",
+                note.title
+            ),
+            source_note_id: note.note_id.clone(),
+            source_note_title: note.title.clone(),
+        });
+    }
+
+    for index in 0..input.short_answer_count {
+        let note = &notes[(index + input.multiple_choice_count) % notes.len()];
+        let concept = note
+            .concepts
+            .get(index % note.concepts.len().max(1))
+            .cloned()
+            .unwrap_or_else(|| note.title.clone());
+        let expected_answer = if note.excerpt.trim().is_empty() {
+            format!("{concept} should be explained with the main idea from {}.", note.title)
+        } else {
+            note.excerpt.clone()
+        };
+
+        questions.push(GeneratedExamQuestion {
+            question_type: ExamQuestionType::ShortAnswer,
+            prompt: format!(
+                "In one or two sentences, explain how {concept} is used in {}.",
+                note.title
+            ),
+            options: Vec::new(),
+            correct_answer: expected_answer.clone(),
+            explanation: format!(
+                "A strong answer should reference {concept} and tie it back to {}.",
+                note.title
+            ),
+            source_note_id: note.note_id.clone(),
+            source_note_title: note.title.clone(),
+        });
+    }
+
+    Ok(GeneratedExamPayload {
+        instructions: format!(
+            "Answer from memory first for {course_name}. Review the linked notes only after you submit."
+        ),
+        summary: format!(
+            "Built from {} queued notes with a {:?} difficulty mix.",
+            notes.len(),
+            input.difficulty
+        ),
+        questions,
+    })
+}
+
+fn build_mock_grading(
+    _course_name: &str,
+    _exam_title: &str,
+    questions: &[ExamGradingQuestionInput],
+) -> GradedExamPayload {
+    let mut earned = 0.0f64;
+    let mut results = Vec::with_capacity(questions.len());
+
+    for question in questions {
+        let verdict = mock_verdict(question);
+        earned += match verdict {
+            ExamVerdict::Correct => 1.0,
+            ExamVerdict::Partial => 0.5,
+            ExamVerdict::Incorrect => 0.0,
+        };
+
+        results.push(GradedExamQuestion {
+            question_id: question.question_id.clone(),
+            verdict,
+            expected_answer: question.expected_answer.clone(),
+            explanation: question.explanation.clone(),
+            feedback: match verdict {
+                ExamVerdict::Correct => {
+                    "Correct. Keep this idea in your active recall rotation.".to_string()
+                }
+                ExamVerdict::Partial => {
+                    "Partly right. Tighten the wording and the exact definition.".to_string()
+                }
+                ExamVerdict::Incorrect => {
+                    "Incorrect. Bring this note back into focused review.".to_string()
+                }
+            },
+        });
+    }
+
+    let score = if questions.is_empty() {
+        0.0
+    } else {
+        (earned / questions.len() as f64) * 100.0
+    };
+    let overall_feedback = if score >= 80.0 {
+        "Strong result. You can retire the clean notes and queue one harder mixed exam next."
+    } else if score >= 60.0 {
+        "Decent base, but the weaker notes still need another pass before you compress the material."
+    } else {
+        "This exam exposed real gaps. Move the missed notes into review and retry a shorter exam."
+    };
+
+    GradedExamPayload {
+        overall_feedback: overall_feedback.to_string(),
+        results,
+    }
+}
+
+fn mock_verdict(question: &ExamGradingQuestionInput) -> ExamVerdict {
+    match question.question_type {
+        ExamQuestionType::MultipleChoice => {
+            if normalize_answer_value(&question.user_answer) == normalize_text(&question.expected_answer) {
+                ExamVerdict::Correct
+            } else {
+                ExamVerdict::Incorrect
+            }
+        }
+        ExamQuestionType::ShortAnswer => {
+            let user = normalize_answer_value(&question.user_answer);
+            let expected = normalize_text(&question.expected_answer);
+            if user.is_empty() {
+                return ExamVerdict::Incorrect;
+            }
+            if user == expected || expected.contains(&user) || user.contains(&expected) {
+                return ExamVerdict::Correct;
+            }
+
+            let keywords = question
+                .expected_answer
+                .split(|ch: char| !ch.is_alphanumeric())
+                .map(normalize_text)
+                .filter(|token| token.len() >= 5)
+                .collect::<Vec<_>>();
+            if keywords
+                .iter()
+                .filter(|token| !token.is_empty() && user.contains(token.as_str()))
+                .take(2)
+                .count()
+                >= 1
+            {
+                ExamVerdict::Partial
+            } else {
+                ExamVerdict::Incorrect
+            }
+        }
+    }
+}
+
+fn normalize_answer_value(value: &ExamAnswerValue) -> String {
+    match value {
+        ExamAnswerValue::Text(text) => normalize_text(text),
+        ExamAnswerValue::Many(values) => values
+            .iter()
+            .map(|value| normalize_text(value))
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
+fn normalize_text(value: &str) -> String {
+    value
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() || ch.is_whitespace() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[derive(Debug, Deserialize)]
 struct FlashcardEnvelope {
     cards: Vec<FlashcardCard>,
@@ -346,7 +891,14 @@ struct FlashcardEnvelope {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_json_object, message_content, parse_json_blob};
+    use super::{
+        extract_json_object, generate_exam, grade_exam_attempt, message_content, parse_json_blob,
+        AiProviderSettings, ExamGenerationNoteInput, ExamGradingQuestionInput,
+    };
+    use crate::models::{
+        ExamAnswerValue, ExamBuilderInput, ExamDifficulty, ExamPreset, ExamQuestionType,
+        ExamVerdict,
+    };
     use serde::Deserialize;
     use serde_json::json;
 
@@ -396,5 +948,87 @@ mod tests {
 
         let content = message_content(&response).expect("content");
         assert_eq!(content, "line one\nline two");
+    }
+
+    #[test]
+    fn mock_exam_generation_respects_requested_counts() {
+        let settings = AiProviderSettings {
+            base_url: "mock://exam".to_string(),
+            model: "mock-model".to_string(),
+            api_key: String::new(),
+            enabled: true,
+            timeout_ms: 2_000,
+        };
+        let input = ExamBuilderInput {
+            course_id: "course-1".to_string(),
+            preset: ExamPreset::Sprint,
+            multiple_choice_count: 2,
+            short_answer_count: 1,
+            difficulty: ExamDifficulty::Mixed,
+            time_limit_minutes: 10,
+            generate_count: 1,
+            title: None,
+        };
+        let notes = vec![ExamGenerationNoteInput {
+            note_id: "note-1".to_string(),
+            title: "Limits".to_string(),
+            relative_path: "limits.md".to_string(),
+            excerpt: "Limits describe how a function behaves near a point.".to_string(),
+            headings: vec!["Definition".to_string()],
+            concepts: vec!["limit".to_string()],
+            formulas: vec!["\\lim_{x\\to a} f(x)".to_string()],
+            links: vec!["continuity".to_string()],
+        }];
+
+        let payload = generate_exam(&settings, "Math", &input, &notes).expect("exam payload");
+        assert_eq!(payload.questions.len(), 3);
+        assert_eq!(
+            payload
+                .questions
+                .iter()
+                .filter(|question| question.question_type == ExamQuestionType::MultipleChoice)
+                .count(),
+            2
+        );
+        assert_eq!(
+            payload
+                .questions
+                .iter()
+                .filter(|question| question.question_type == ExamQuestionType::ShortAnswer)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn mock_grading_returns_partial_for_close_short_answer() {
+        let settings = AiProviderSettings {
+            base_url: "mock://exam".to_string(),
+            model: "mock-model".to_string(),
+            api_key: String::new(),
+            enabled: true,
+            timeout_ms: 2_000,
+        };
+        let grading = grade_exam_attempt(
+            &settings,
+            "Math",
+            "Sprint",
+            &[ExamGradingQuestionInput {
+                question_id: "question-1".to_string(),
+                index: 1,
+                question_type: ExamQuestionType::ShortAnswer,
+                prompt: "Explain limits.".to_string(),
+                options: Vec::new(),
+                source_note_id: "note-1".to_string(),
+                source_note_title: "Limits".to_string(),
+                expected_answer: "Limits describe how a function behaves near a point.".to_string(),
+                explanation: "Mention behavior near a point.".to_string(),
+                user_answer: ExamAnswerValue::Text("function point".to_string()),
+            }],
+        )
+        .expect("grading");
+
+        assert_eq!(grading.results.len(), 1);
+        assert_eq!(grading.results[0].verdict, ExamVerdict::Partial);
     }
 }

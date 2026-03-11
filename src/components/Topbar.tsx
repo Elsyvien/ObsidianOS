@@ -39,6 +39,10 @@ export function Topbar({
         ? selectedCourse
           ? `${selectedCourse.name} AI workspace`
           : "AI workspace"
+        : activeView === "exams"
+          ? selectedCourse
+            ? `${selectedCourse.name} exam engine`
+            : "Exams"
         : activeView === "notes"
           ? selectedCourse
             ? `${selectedCourse.name} notes`

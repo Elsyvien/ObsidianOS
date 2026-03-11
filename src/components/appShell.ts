@@ -1,4 +1,4 @@
-export type AppView = "overview" | "ai" | "logs" | "courses" | "notes" | "outputs" | "settings";
+export type AppView = "overview" | "ai" | "exams" | "logs" | "courses" | "notes" | "outputs" | "settings";
 
 export type NoteFilter = "all" | "weak" | "selected";
 
@@ -16,6 +16,11 @@ export const APP_VIEWS: Array<{
     id: "ai",
     label: "AI",
     description: "Run AI enrichment, review the course brief, and track which notes still need support.",
+  },
+  {
+    id: "exams",
+    label: "Exams",
+    description: "Queue generated exams, take them in app, and turn results into a real review queue.",
   },
   {
     id: "logs",

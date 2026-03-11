@@ -14,11 +14,16 @@ use walkdir::WalkDir;
 use crate::ai::{self, AiProviderSettings, FlashcardCard};
 use crate::markdown::{normalize_key, note_title_candidates, parse_markdown};
 use crate::models::{
-    AiCourseSummary, AiNoteInsight, AiSettings, AiSettingsInput, ConceptMetric, Countdown,
-    CourseConfig, CourseConfigInput, CoverageStats, DashboardData, FlashcardGenerationRequest,
-    FlashcardGenerationResult, FlashcardSummary, FormulaMetric, GraphStats, NoteDetails,
-    NoteSummary, RevisionNoteRequest, RevisionNoteResult, RevisionSummary, ScanReport, ScanStatus,
-    ValidationResult, VaultConfig, WeakNote, WorkspaceSnapshot,
+    AiCourseSummary, AiNoteInsight, AiSettings, AiSettingsInput, ApplyExamReviewActionsRequest,
+    ConceptMetric, Countdown, CourseConfig, CourseConfigInput, CoverageStats, DashboardData,
+    ExamAnswerValue, ExamAttemptResult, ExamAttemptSummary, ExamBuilderInput,
+    ExamDefaults, ExamDetails, ExamDifficulty, ExamPreset, ExamQuestion, ExamQuestionResult,
+    ExamQuestionType, ExamReviewSuggestion, ExamSourceNote, ExamStatus, ExamSubmissionRequest,
+    ExamSummary, ExamVerdict, ExamWorkspaceSnapshot, ExamWorkspaceSummary,
+    FlashcardGenerationRequest, FlashcardGenerationResult, FlashcardSummary, FormulaMetric,
+    GraphStats, NoteDetails, NoteMasteryState, NoteSummary, RevisionNoteRequest,
+    RevisionNoteResult, RevisionSummary, ScanReport, ScanStatus, ValidationResult, VaultConfig,
+    WeakNote, WorkspaceSnapshot,
 };
 
 pub struct Database {
@@ -139,6 +144,47 @@ struct AiStatusCounts {
     failed_notes: usize,
     stale_notes: usize,
     missing_notes: usize,
+}
+
+#[derive(Debug, Clone)]
+struct StoredExamRecord {
+    id: String,
+    course_id: String,
+    title: String,
+    preset: ExamPreset,
+    status: ExamStatus,
+    difficulty: ExamDifficulty,
+    question_count: usize,
+    source_note_count: usize,
+    multiple_choice_count: usize,
+    short_answer_count: usize,
+    time_limit_minutes: usize,
+    created_at: String,
+    updated_at: String,
+    generated_at: Option<String>,
+    instructions: String,
+    summary: String,
+    source_note_ids: Vec<String>,
+    last_error: Option<String>,
+    _model: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StoredExamAttempt {
+    course_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct StoredExamGenerationJob {
+    exam: StoredExamRecord,
+    notes: Vec<ai::ExamGenerationNoteInput>,
+}
+
+#[derive(Debug, Clone)]
+struct StoredNoteMastery {
+    note_id: String,
+    mastery_state: NoteMasteryState,
+    last_accuracy: Option<f64>,
 }
 
 impl Database {
@@ -311,12 +357,106 @@ impl Database {
               last_error TEXT,
               FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS exam_source_queue (
+              course_id TEXT NOT NULL,
+              note_id TEXT NOT NULL,
+              queued_at TEXT NOT NULL,
+              PRIMARY KEY (course_id, note_id),
+              FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE,
+              FOREIGN KEY (note_id) REFERENCES note_records(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS note_mastery_states (
+              note_id TEXT PRIMARY KEY,
+              course_id TEXT NOT NULL,
+              mastery_state TEXT NOT NULL,
+              last_accuracy REAL,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE,
+              FOREIGN KEY (note_id) REFERENCES note_records(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS exams (
+              id TEXT PRIMARY KEY,
+              course_id TEXT NOT NULL,
+              title TEXT NOT NULL,
+              preset TEXT NOT NULL,
+              status TEXT NOT NULL,
+              difficulty TEXT NOT NULL,
+              question_count INTEGER NOT NULL,
+              source_note_count INTEGER NOT NULL,
+              multiple_choice_count INTEGER NOT NULL,
+              short_answer_count INTEGER NOT NULL,
+              time_limit_minutes INTEGER NOT NULL,
+              source_note_ids_json TEXT NOT NULL DEFAULT '[]',
+              instructions TEXT NOT NULL DEFAULT '',
+              summary TEXT NOT NULL DEFAULT '',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              generated_at TEXT,
+              last_error TEXT,
+              model TEXT,
+              FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS exam_questions (
+              id TEXT PRIMARY KEY,
+              exam_id TEXT NOT NULL,
+              position INTEGER NOT NULL,
+              question_type TEXT NOT NULL,
+              prompt TEXT NOT NULL,
+              options_json TEXT NOT NULL,
+              correct_answer TEXT NOT NULL,
+              explanation TEXT NOT NULL,
+              source_note_id TEXT NOT NULL,
+              source_note_title TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY (exam_id) REFERENCES exams(id) ON DELETE CASCADE,
+              FOREIGN KEY (source_note_id) REFERENCES note_records(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS exam_attempts (
+              id TEXT PRIMARY KEY,
+              exam_id TEXT NOT NULL,
+              course_id TEXT NOT NULL,
+              submitted_at TEXT NOT NULL,
+              score_percent REAL NOT NULL,
+              correct_count INTEGER NOT NULL,
+              partial_count INTEGER NOT NULL,
+              incorrect_count INTEGER NOT NULL,
+              overall_feedback TEXT NOT NULL,
+              FOREIGN KEY (exam_id) REFERENCES exams(id) ON DELETE CASCADE,
+              FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS exam_attempt_question_results (
+              id TEXT PRIMARY KEY,
+              attempt_id TEXT NOT NULL,
+              question_id TEXT NOT NULL,
+              position INTEGER NOT NULL,
+              question_type TEXT NOT NULL,
+              prompt TEXT NOT NULL,
+              options_json TEXT NOT NULL,
+              source_note_id TEXT NOT NULL,
+              source_note_title TEXT NOT NULL,
+              user_answer_json TEXT NOT NULL,
+              verdict TEXT NOT NULL,
+              is_correct INTEGER NOT NULL,
+              expected_answer TEXT NOT NULL,
+              explanation TEXT NOT NULL,
+              feedback TEXT NOT NULL,
+              FOREIGN KEY (attempt_id) REFERENCES exam_attempts(id) ON DELETE CASCADE,
+              FOREIGN KEY (question_id) REFERENCES exam_questions(id) ON DELETE CASCADE,
+              FOREIGN KEY (source_note_id) REFERENCES note_records(id) ON DELETE CASCADE
+            );
             CREATE INDEX IF NOT EXISTS idx_notes_course ON note_records(course_id);
             CREATE INDEX IF NOT EXISTS idx_concepts_course ON concept_records(course_id);
             CREATE INDEX IF NOT EXISTS idx_formulas_course ON formula_records(course_id);
             CREATE INDEX IF NOT EXISTS idx_edges_course ON dependency_edges(course_id);
             CREATE INDEX IF NOT EXISTS idx_weak_course ON weak_link_suggestions(course_id);
             CREATE INDEX IF NOT EXISTS idx_ai_note_states_course ON ai_note_states(course_id);
+            CREATE INDEX IF NOT EXISTS idx_exam_source_queue_course ON exam_source_queue(course_id, queued_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_note_mastery_course ON note_mastery_states(course_id, mastery_state);
+            CREATE INDEX IF NOT EXISTS idx_exams_course_status ON exams(course_id, status, created_at DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_exam_questions_order ON exam_questions(exam_id, position);
+            CREATE INDEX IF NOT EXISTS idx_exam_attempts_exam ON exam_attempts(exam_id, submitted_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_exam_attempts_course ON exam_attempts(course_id, submitted_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_exam_attempt_results_attempt ON exam_attempt_question_results(attempt_id, position);
             "#,
         )?;
         Ok(())
@@ -600,6 +740,7 @@ impl Database {
             formulas: build_top_formulas(&formulas),
             flashcards: build_flashcard_summary(&flashcard_sets),
             revision: build_revision_summary(&revision_runs),
+            exams: self.get_exam_workspace_summary(&course.id)?,
             notes: build_note_summaries(&notes, &edges, &concepts, &formulas, &ai_states),
             ai: build_ai_course_summary(
                 notes.len(),
@@ -1048,6 +1189,430 @@ impl Database {
             params![course_id, timestamp, truncate_error(message)],
         )?;
         Ok(())
+    }
+}
+
+impl Database {
+    pub fn get_exam_workspace(
+        &self,
+        course_id: Option<String>,
+    ) -> Result<Option<ExamWorkspaceSnapshot>> {
+        let courses = self.list_courses()?;
+        if courses.is_empty() {
+            return Ok(None);
+        }
+
+        let selected = course_id
+            .or_else(|| self.get_selected_course_id().ok().flatten())
+            .and_then(|id| courses.iter().find(|course| course.id == id).map(|course| course.id.clone()))
+            .unwrap_or_else(|| courses[0].id.clone());
+
+        self.set_selected_course(Some(&selected))?;
+        Ok(Some(self.build_exam_workspace(&selected)?))
+    }
+
+    pub fn add_exam_source_notes(
+        &self,
+        course_id: &str,
+        note_ids: &[String],
+    ) -> Result<ExamWorkspaceSnapshot> {
+        self.find_course(course_id)?
+            .ok_or_else(|| anyhow!("course not found"))?;
+
+        let valid_note_ids = self
+            .list_notes(course_id)?
+            .into_iter()
+            .map(|note| note.id)
+            .collect::<HashSet<_>>();
+        let timestamp = now_string();
+
+        for note_id in note_ids {
+            if !valid_note_ids.contains(note_id) {
+                continue;
+            }
+            self.conn.execute(
+                r#"
+                INSERT INTO exam_source_queue (course_id, note_id, queued_at)
+                VALUES (?1, ?2, ?3)
+                ON CONFLICT(course_id, note_id) DO UPDATE SET
+                  queued_at = excluded.queued_at
+                "#,
+                params![course_id, note_id, timestamp],
+            )?;
+        }
+
+        self.build_exam_workspace(course_id)
+    }
+
+    pub fn remove_exam_source_notes(
+        &self,
+        course_id: &str,
+        note_ids: &[String],
+    ) -> Result<ExamWorkspaceSnapshot> {
+        self.find_course(course_id)?
+            .ok_or_else(|| anyhow!("course not found"))?;
+
+        for note_id in note_ids {
+            self.conn.execute(
+                "DELETE FROM exam_source_queue WHERE course_id = ?1 AND note_id = ?2",
+                params![course_id, note_id],
+            )?;
+        }
+
+        self.build_exam_workspace(course_id)
+    }
+
+    pub fn clear_exam_source_queue(&self, course_id: &str) -> Result<ExamWorkspaceSnapshot> {
+        self.find_course(course_id)?
+            .ok_or_else(|| anyhow!("course not found"))?;
+        self.conn.execute(
+            "DELETE FROM exam_source_queue WHERE course_id = ?1",
+            params![course_id],
+        )?;
+        self.build_exam_workspace(course_id)
+    }
+
+    pub fn queue_exams(&self, request: ExamBuilderInput) -> Result<ExamWorkspaceSnapshot> {
+        self.ai_settings_for_runtime()?.ok_or_else(|| {
+            anyhow!("enable AI in Setup and save reachable provider settings first")
+        })?;
+        let course = self
+            .find_course(&request.course_id)?
+            .ok_or_else(|| anyhow!("course not found"))?;
+        let source_note_ids = self.list_exam_source_queue_ids(&course.id)?;
+        if source_note_ids.is_empty() {
+            bail!("add one or more notes to the exam source queue first");
+        }
+
+        let request = normalize_exam_builder_input(request)?;
+        let existing_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM exams WHERE course_id = ?1",
+            params![&course.id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+
+        for offset in 0..request.generate_count {
+            let created_at = now_string();
+            let title = request
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} Exam {}",
+                        exam_preset_label(request.preset),
+                        existing_count + offset + 1
+                    )
+                });
+            let exam_id = Uuid::new_v4().to_string();
+            self.conn.execute(
+                r#"
+                INSERT INTO exams (
+                  id, course_id, title, preset, status, difficulty, question_count, source_note_count,
+                  multiple_choice_count, short_answer_count, time_limit_minutes, source_note_ids_json,
+                  instructions, summary, created_at, updated_at, generated_at, last_error, model
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, '', '', ?13, ?13, NULL, NULL, NULL)
+                "#,
+                params![
+                    exam_id,
+                    course.id,
+                    title,
+                    exam_preset_to_str(request.preset),
+                    exam_status_to_str(ExamStatus::Queued),
+                    exam_difficulty_to_str(request.difficulty),
+                    (request.multiple_choice_count + request.short_answer_count) as i64,
+                    source_note_ids.len() as i64,
+                    request.multiple_choice_count as i64,
+                    request.short_answer_count as i64,
+                    request.time_limit_minutes as i64,
+                    to_json(&source_note_ids),
+                    created_at,
+                ],
+            )?;
+        }
+
+        self.build_exam_workspace(&course.id)
+    }
+
+    pub fn has_pending_exam_jobs(&self, course_id: &str) -> Result<bool> {
+        let count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM exams WHERE course_id = ?1 AND status IN ('queued', 'generating')",
+            params![course_id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn run_exam_generation_queue(&self, course_id: &str) -> Result<()> {
+        let settings = self.ai_settings_for_runtime()?.ok_or_else(|| {
+            anyhow!("enable AI in Setup and save reachable provider settings first")
+        })?;
+        let course = self
+            .find_course(course_id)?
+            .ok_or_else(|| anyhow!("course not found"))?;
+
+        while let Some(job) = self.claim_next_exam_generation_job(course_id)? {
+            let input = build_exam_builder_input_from_record(&job.exam);
+            let result = ai::generate_exam(&settings, &course.name, &input, &job.notes);
+
+            match result {
+                Ok(payload) => {
+                    self.store_generated_exam(
+                        &job.exam.id,
+                        &payload.instructions,
+                        &payload.summary,
+                        &payload.questions,
+                        &settings.model,
+                    )?;
+                }
+                Err(error) => {
+                    self.fail_exam_generation(&job.exam.id, &error.to_string())?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn mark_exam_generation_failed(&self, course_id: &str, message: &str) -> Result<()> {
+        if let Some(exam) = self.find_generating_exam(course_id)? {
+            self.fail_exam_generation(&exam.id, message)?;
+        }
+        Ok(())
+    }
+
+    pub fn get_exam_details(&self, exam_id: &str) -> Result<ExamDetails> {
+        let exam = self
+            .find_exam_record(exam_id)?
+            .ok_or_else(|| anyhow!("exam not found"))?;
+        let questions = self.load_exam_questions(exam_id, true)?;
+        let source_notes = self.load_exam_source_notes_snapshot(&exam.course_id, &exam.source_note_ids)?;
+
+        Ok(build_exam_details(exam, questions, source_notes))
+    }
+
+    pub fn submit_exam_attempt(&self, request: ExamSubmissionRequest) -> Result<ExamAttemptResult> {
+        let settings = self.ai_settings_for_runtime()?.ok_or_else(|| {
+            anyhow!("enable AI in Setup and save reachable provider settings first")
+        })?;
+        let exam = self
+            .find_exam_record(&request.exam_id)?
+            .ok_or_else(|| anyhow!("exam not found"))?;
+        if exam.status != ExamStatus::Ready {
+            bail!("exam is not ready yet");
+        }
+
+        let course = self
+            .find_course(&exam.course_id)?
+            .ok_or_else(|| anyhow!("course not found"))?;
+        let questions = self.load_exam_questions(&exam.id, false)?;
+        if questions.is_empty() {
+            bail!("exam has no generated questions");
+        }
+
+        let answers = request
+            .answers
+            .into_iter()
+            .map(|entry| (entry.question_id, entry.answer))
+            .collect::<HashMap<_, _>>();
+        let grading_input = questions
+            .iter()
+            .map(|question| ai::ExamGradingQuestionInput {
+                question_id: question.id.clone(),
+                index: question.index,
+                question_type: question.question_type,
+                prompt: question.prompt.clone(),
+                options: question.options.clone(),
+                source_note_id: question.source_note_id.clone(),
+                source_note_title: question.source_note_title.clone(),
+                expected_answer: question.expected_answer.clone().unwrap_or_default(),
+                explanation: question.explanation.clone().unwrap_or_default(),
+                user_answer: answers
+                    .get(&question.id)
+                    .cloned()
+                    .unwrap_or_else(|| empty_answer_for_question(question.question_type)),
+            })
+            .collect::<Vec<_>>();
+        let grading = ai::grade_exam_attempt(&settings, &course.name, &exam.title, &grading_input)?;
+        let grading_by_question = grading
+            .results
+            .into_iter()
+            .map(|result| (result.question_id.clone(), result))
+            .collect::<HashMap<_, _>>();
+
+        let mut question_results = Vec::with_capacity(questions.len());
+        let mut note_scores = HashMap::<String, (f64, usize)>::new();
+        let mut correct_count = 0usize;
+        let mut partial_count = 0usize;
+        let mut incorrect_count = 0usize;
+
+        for question in questions {
+            let grading_result = grading_by_question
+                .get(&question.id)
+                .ok_or_else(|| anyhow!("grading response omitted question {}", question.id))?;
+            let user_answer = answers
+                .get(&question.id)
+                .cloned()
+                .unwrap_or_else(|| empty_answer_for_question(question.question_type));
+            let is_correct = grading_result.verdict == ExamVerdict::Correct;
+
+            match grading_result.verdict {
+                ExamVerdict::Correct => correct_count += 1,
+                ExamVerdict::Partial => partial_count += 1,
+                ExamVerdict::Incorrect => incorrect_count += 1,
+            }
+
+            let entry = note_scores
+                .entry(question.source_note_id.clone())
+                .or_insert((0.0, 0usize));
+            entry.0 += match grading_result.verdict {
+                ExamVerdict::Correct => 1.0,
+                ExamVerdict::Partial => 0.5,
+                ExamVerdict::Incorrect => 0.0,
+            };
+            entry.1 += 1;
+
+            question_results.push(ExamQuestionResult {
+                question_id: question.id.clone(),
+                index: question.index,
+                question_type: question.question_type,
+                prompt: question.prompt.clone(),
+                options: question.options.clone(),
+                source_note_id: question.source_note_id.clone(),
+                source_note_title: question.source_note_title.clone(),
+                user_answer,
+                verdict: grading_result.verdict,
+                is_correct,
+                expected_answer: grading_result.expected_answer.clone(),
+                explanation: grading_result.explanation.clone(),
+                feedback: grading_result.feedback.clone(),
+            });
+        }
+
+        let total_questions = question_results.len().max(1);
+        let score_percent =
+            round_percentage(((correct_count as f64 + partial_count as f64 * 0.5) / total_questions as f64) * 100.0);
+        let submitted_at = now_string();
+        let attempt_id = Uuid::new_v4().to_string();
+
+        self.conn.execute(
+            r#"
+            INSERT INTO exam_attempts (
+              id, exam_id, course_id, submitted_at, score_percent, correct_count,
+              partial_count, incorrect_count, overall_feedback
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+            params![
+                &attempt_id,
+                &exam.id,
+                &exam.course_id,
+                &submitted_at,
+                score_percent,
+                correct_count as i64,
+                partial_count as i64,
+                incorrect_count as i64,
+                &grading.overall_feedback,
+            ],
+        )?;
+
+        for result in &question_results {
+            self.conn.execute(
+                r#"
+                INSERT INTO exam_attempt_question_results (
+                  id, attempt_id, question_id, position, question_type, prompt, options_json,
+                  source_note_id, source_note_title, user_answer_json, verdict, is_correct,
+                  expected_answer, explanation, feedback
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                "#,
+                params![
+                    Uuid::new_v4().to_string(),
+                    &attempt_id,
+                    result.question_id,
+                    result.index as i64,
+                    exam_question_type_to_str(result.question_type),
+                    result.prompt,
+                    to_json(&result.options),
+                    result.source_note_id,
+                    result.source_note_title,
+                    to_json(&result.user_answer),
+                    exam_verdict_to_str(result.verdict),
+                    bool_to_int(result.is_correct),
+                    result.expected_answer,
+                    result.explanation,
+                    result.feedback,
+                ],
+            )?;
+        }
+
+        let note_suggestions = self.build_note_suggestions(&exam.course_id, &note_scores)?;
+        let overall_feedback = self
+            .conn
+            .query_row(
+                "SELECT overall_feedback FROM exam_attempts WHERE id = ?1",
+                params![&attempt_id],
+                |row| row.get::<_, String>(0),
+            )?;
+
+        Ok(ExamAttemptResult {
+            exam_id: exam.id,
+            attempt_id,
+            submitted_at,
+            score_percent,
+            correct_count,
+            partial_count,
+            incorrect_count,
+            overall_feedback,
+            question_results,
+            note_suggestions,
+        })
+    }
+
+    pub fn apply_exam_review_actions(
+        &self,
+        request: ApplyExamReviewActionsRequest,
+    ) -> Result<ExamWorkspaceSnapshot> {
+        let attempt = self
+            .find_exam_attempt(&request.attempt_id)?
+            .ok_or_else(|| anyhow!("exam attempt not found"))?;
+
+        for action in request.actions {
+            let note_course_id = self.note_course_id(&action.note_id)?;
+            if note_course_id != attempt.course_id {
+                bail!("note does not belong to the exam course");
+            }
+
+            let accuracy = self.note_mastery_for_note(&action.note_id)?.and_then(|row| row.last_accuracy);
+            self.upsert_note_mastery(
+                &action.note_id,
+                &attempt.course_id,
+                action.next_state,
+                accuracy,
+            )?;
+
+            if action.add_to_exam_queue {
+                self.conn.execute(
+                    r#"
+                    INSERT INTO exam_source_queue (course_id, note_id, queued_at)
+                    VALUES (?1, ?2, ?3)
+                    ON CONFLICT(course_id, note_id) DO UPDATE SET
+                      queued_at = excluded.queued_at
+                    "#,
+                    params![&attempt.course_id, action.note_id, now_string()],
+                )?;
+            } else {
+                self.conn.execute(
+                    "DELETE FROM exam_source_queue WHERE course_id = ?1 AND note_id = ?2",
+                    params![&attempt.course_id, action.note_id],
+                )?;
+            }
+        }
+
+        self.build_exam_workspace(&attempt.course_id)
     }
 }
 
@@ -2283,6 +2848,958 @@ impl Database {
     }
 }
 
+impl Database {
+    fn get_exam_workspace_summary(&self, course_id: &str) -> Result<ExamWorkspaceSummary> {
+        let source_queue_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM exam_source_queue WHERE course_id = ?1",
+            params![course_id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+        let queued_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM exams WHERE course_id = ?1 AND status = 'queued'",
+            params![course_id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+        let generating_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM exams WHERE course_id = ?1 AND status = 'generating'",
+            params![course_id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+        let ready_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM exams WHERE course_id = ?1 AND status = 'ready'",
+            params![course_id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+        let failed_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM exams WHERE course_id = ?1 AND status = 'failed'",
+            params![course_id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+        let review_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM note_mastery_states WHERE course_id = ?1 AND mastery_state = 'review'",
+            params![course_id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+        let mastered_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM note_mastery_states WHERE course_id = ?1 AND mastery_state = 'mastered'",
+            params![course_id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+        let latest_attempted_at = self
+            .conn
+            .query_row(
+                "SELECT submitted_at FROM exam_attempts WHERE course_id = ?1 ORDER BY submitted_at DESC LIMIT 1",
+                params![course_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        Ok(ExamWorkspaceSummary {
+            source_queue_count,
+            queued_count,
+            generating_count,
+            ready_count,
+            failed_count,
+            review_count,
+            mastered_count,
+            latest_attempted_at,
+        })
+    }
+
+    fn build_exam_workspace(&self, course_id: &str) -> Result<ExamWorkspaceSnapshot> {
+        let source_queue = self.list_exam_source_queue_notes(course_id)?;
+        let note_mastery = self.list_note_mastery_by_course(course_id)?;
+        let note_lookup = self
+            .list_notes(course_id)?
+            .into_iter()
+            .map(|note| (note.id.clone(), note))
+            .collect::<HashMap<_, _>>();
+        let concept_counts = self
+            .list_concepts(course_id)?
+            .into_iter()
+            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _, _)| {
+                *acc.entry(note_id).or_insert(0) += 1;
+                acc
+            });
+        let formula_counts = self
+            .list_formulas(course_id)?
+            .into_iter()
+            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _)| {
+                *acc.entry(note_id).or_insert(0) += 1;
+                acc
+            });
+        let ai_states = self.list_ai_note_states(course_id)?;
+        let exam_records = self.list_exam_records(course_id)?;
+        let history = self.list_exam_attempt_summaries(course_id)?;
+
+        let mut queued_exams = Vec::new();
+        let mut ready_exams = Vec::new();
+        let mut failed_exams = Vec::new();
+        for record in exam_records {
+            match record.status {
+                ExamStatus::Queued | ExamStatus::Generating => {
+                    queued_exams.push(self.build_exam_summary(record)?)
+                }
+                ExamStatus::Ready => ready_exams.push(self.build_exam_summary(record)?),
+                ExamStatus::Failed => failed_exams.push(self.build_exam_summary(record)?),
+            }
+        }
+
+        let review_notes = note_lookup
+            .values()
+            .filter(|note| {
+                note_mastery
+                    .get(&note.id)
+                    .map(|row| row.mastery_state == NoteMasteryState::Review)
+                    .unwrap_or(false)
+            })
+            .map(|note| {
+                self.build_exam_source_note(
+                    note,
+                    note_mastery.get(&note.id),
+                    &concept_counts,
+                    &formula_counts,
+                    &ai_states,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mastered_notes = note_lookup
+            .values()
+            .filter(|note| {
+                note_mastery
+                    .get(&note.id)
+                    .map(|row| row.mastery_state == NoteMasteryState::Mastered)
+                    .unwrap_or(false)
+            })
+            .map(|note| {
+                self.build_exam_source_note(
+                    note,
+                    note_mastery.get(&note.id),
+                    &concept_counts,
+                    &formula_counts,
+                    &ai_states,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        Ok(ExamWorkspaceSnapshot {
+            course_id: course_id.to_string(),
+            defaults: default_exam_defaults(),
+            source_queue,
+            queued_exams,
+            ready_exams,
+            failed_exams,
+            history,
+            review_notes,
+            mastered_notes,
+            summary: self.get_exam_workspace_summary(course_id)?,
+        })
+    }
+
+    fn list_exam_source_queue_ids(&self, course_id: &str) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            "SELECT note_id FROM exam_source_queue WHERE course_id = ?1 ORDER BY queued_at DESC, note_id ASC",
+        )?;
+        let rows = statement
+            .query_map(params![course_id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn list_exam_source_queue_notes(&self, course_id: &str) -> Result<Vec<ExamSourceNote>> {
+        let note_mastery = self.list_note_mastery_by_course(course_id)?;
+        let note_lookup = self
+            .list_notes(course_id)?
+            .into_iter()
+            .map(|note| (note.id.clone(), note))
+            .collect::<HashMap<_, _>>();
+        let concept_counts = self
+            .list_concepts(course_id)?
+            .into_iter()
+            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _, _)| {
+                *acc.entry(note_id).or_insert(0) += 1;
+                acc
+            });
+        let formula_counts = self
+            .list_formulas(course_id)?
+            .into_iter()
+            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _)| {
+                *acc.entry(note_id).or_insert(0) += 1;
+                acc
+            });
+        let ai_states = self.list_ai_note_states(course_id)?;
+
+        let rows = self
+            .list_exam_source_queue_ids(course_id)?
+            .into_iter()
+            .filter_map(|note_id| note_lookup.get(&note_id).cloned())
+            .map(|note| {
+                self.build_exam_source_note(
+                    &note,
+                    note_mastery.get(&note.id),
+                    &concept_counts,
+                    &formula_counts,
+                    &ai_states,
+                )
+            })
+            .collect::<Vec<_>>();
+        Ok(rows)
+    }
+
+    fn list_note_mastery_by_course(&self, course_id: &str) -> Result<HashMap<String, StoredNoteMastery>> {
+        let mut statement = self.conn.prepare(
+            "SELECT note_id, mastery_state, last_accuracy FROM note_mastery_states WHERE course_id = ?1",
+        )?;
+        let rows = statement
+            .query_map(params![course_id], |row| {
+                Ok(StoredNoteMastery {
+                    note_id: row.get(0)?,
+                    mastery_state: note_mastery_state_from_str(&row.get::<_, String>(1)?)
+                        .map_err(to_sql_error)?,
+                    last_accuracy: row.get(2)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.note_id.clone(), row))
+            .collect())
+    }
+
+    fn note_mastery_for_note(&self, note_id: &str) -> Result<Option<StoredNoteMastery>> {
+        self.conn
+            .query_row(
+                "SELECT note_id, mastery_state, last_accuracy FROM note_mastery_states WHERE note_id = ?1",
+                params![note_id],
+                |row| {
+                    Ok(StoredNoteMastery {
+                        note_id: row.get(0)?,
+                        mastery_state: note_mastery_state_from_str(&row.get::<_, String>(1)?)
+                            .map_err(to_sql_error)?,
+                        last_accuracy: row.get(2)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn upsert_note_mastery(
+        &self,
+        note_id: &str,
+        course_id: &str,
+        mastery_state: NoteMasteryState,
+        last_accuracy: Option<f64>,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO note_mastery_states (note_id, course_id, mastery_state, last_accuracy, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(note_id) DO UPDATE SET
+              course_id = excluded.course_id,
+              mastery_state = excluded.mastery_state,
+              last_accuracy = excluded.last_accuracy,
+              updated_at = excluded.updated_at
+            "#,
+            params![
+                note_id,
+                course_id,
+                note_mastery_state_to_str(mastery_state),
+                last_accuracy,
+                now_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn list_exam_records(&self, course_id: &str) -> Result<Vec<StoredExamRecord>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id, course_id, title, preset, status, difficulty, question_count, source_note_count,
+                   multiple_choice_count, short_answer_count, time_limit_minutes, source_note_ids_json,
+                   instructions, summary, created_at, updated_at, generated_at, last_error, model
+            FROM exams
+            WHERE course_id = ?1
+            ORDER BY created_at DESC
+            "#,
+        )?;
+        let rows = statement
+            .query_map(params![course_id], |row| self.read_exam_record_row(row))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn find_exam_record(&self, exam_id: &str) -> Result<Option<StoredExamRecord>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, course_id, title, preset, status, difficulty, question_count, source_note_count,
+                       multiple_choice_count, short_answer_count, time_limit_minutes, source_note_ids_json,
+                       instructions, summary, created_at, updated_at, generated_at, last_error, model
+                FROM exams
+                WHERE id = ?1
+                "#,
+                params![exam_id],
+                |row| self.read_exam_record_row(row),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn find_generating_exam(&self, course_id: &str) -> Result<Option<StoredExamRecord>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, course_id, title, preset, status, difficulty, question_count, source_note_count,
+                       multiple_choice_count, short_answer_count, time_limit_minutes, source_note_ids_json,
+                       instructions, summary, created_at, updated_at, generated_at, last_error, model
+                FROM exams
+                WHERE course_id = ?1 AND status = 'generating'
+                ORDER BY updated_at ASC, created_at ASC
+                LIMIT 1
+                "#,
+                params![course_id],
+                |row| self.read_exam_record_row(row),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn read_exam_record_row(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredExamRecord> {
+        Ok(StoredExamRecord {
+            id: row.get(0)?,
+            course_id: row.get(1)?,
+            title: row.get(2)?,
+            preset: exam_preset_from_str(&row.get::<_, String>(3)?).map_err(to_sql_error)?,
+            status: exam_status_from_str(&row.get::<_, String>(4)?).map_err(to_sql_error)?,
+            difficulty: exam_difficulty_from_str(&row.get::<_, String>(5)?).map_err(to_sql_error)?,
+            question_count: row.get::<_, i64>(6)? as usize,
+            source_note_count: row.get::<_, i64>(7)? as usize,
+            multiple_choice_count: row.get::<_, i64>(8)? as usize,
+            short_answer_count: row.get::<_, i64>(9)? as usize,
+            time_limit_minutes: row.get::<_, i64>(10)? as usize,
+            source_note_ids: from_json_vec::<String>(&row.get::<_, String>(11)?),
+            instructions: row.get(12)?,
+            summary: row.get(13)?,
+            created_at: row.get(14)?,
+            updated_at: row.get(15)?,
+            generated_at: row.get(16)?,
+            last_error: row.get(17)?,
+            _model: row.get(18)?,
+        })
+    }
+
+    fn load_exam_questions(&self, exam_id: &str, hide_answer_key: bool) -> Result<Vec<ExamQuestion>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id, exam_id, position, question_type, prompt, options_json, correct_answer,
+                   explanation, source_note_id, source_note_title
+            FROM exam_questions
+            WHERE exam_id = ?1
+            ORDER BY position ASC
+            "#,
+        )?;
+        let rows = statement
+            .query_map(params![exam_id], |row| {
+                let question_type =
+                    exam_question_type_from_str(&row.get::<_, String>(3)?).map_err(to_sql_error)?;
+                Ok(ExamQuestion {
+                    id: row.get(0)?,
+                    exam_id: row.get(1)?,
+                    index: row.get::<_, i64>(2)? as usize,
+                    question_type,
+                    prompt: row.get(4)?,
+                    options: from_json_vec::<String>(&row.get::<_, String>(5)?),
+                    source_note_id: row.get(8)?,
+                    source_note_title: row.get(9)?,
+                    expected_answer: if hide_answer_key { None } else { Some(row.get(6)?) },
+                    explanation: if hide_answer_key { None } else { Some(row.get(7)?) },
+                    user_answer: None,
+                    is_correct: None,
+                    feedback: None,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn list_exam_attempt_summaries(&self, course_id: &str) -> Result<Vec<ExamAttemptSummary>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT exam_attempts.id, exam_attempts.exam_id, exams.title, exam_attempts.submitted_at,
+                   exam_attempts.score_percent, exam_attempts.correct_count, exam_attempts.partial_count,
+                   exam_attempts.incorrect_count
+            FROM exam_attempts
+            INNER JOIN exams ON exams.id = exam_attempts.exam_id
+            WHERE exam_attempts.course_id = ?1
+            ORDER BY exam_attempts.submitted_at DESC
+            "#,
+        )?;
+        let rows = statement
+            .query_map(params![course_id], |row| {
+                Ok(ExamAttemptSummary {
+                    id: row.get(0)?,
+                    exam_id: row.get(1)?,
+                    exam_title: row.get(2)?,
+                    submitted_at: row.get(3)?,
+                    score_percent: row.get(4)?,
+                    correct_count: row.get::<_, i64>(5)? as usize,
+                    partial_count: row.get::<_, i64>(6)? as usize,
+                    incorrect_count: row.get::<_, i64>(7)? as usize,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn find_exam_attempt(&self, attempt_id: &str) -> Result<Option<StoredExamAttempt>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT course_id
+                FROM exam_attempts
+                WHERE exam_attempts.id = ?1
+                "#,
+                params![attempt_id],
+                |row| Ok(StoredExamAttempt { course_id: row.get(0)? }),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn load_exam_source_notes_snapshot(
+        &self,
+        course_id: &str,
+        note_ids: &[String],
+    ) -> Result<Vec<ExamSourceNote>> {
+        let note_mastery = self.list_note_mastery_by_course(course_id)?;
+        let note_lookup = self
+            .list_notes(course_id)?
+            .into_iter()
+            .map(|note| (note.id.clone(), note))
+            .collect::<HashMap<_, _>>();
+        let concept_counts = self
+            .list_concepts(course_id)?
+            .into_iter()
+            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _, _)| {
+                *acc.entry(note_id).or_insert(0) += 1;
+                acc
+            });
+        let formula_counts = self
+            .list_formulas(course_id)?
+            .into_iter()
+            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _)| {
+                *acc.entry(note_id).or_insert(0) += 1;
+                acc
+            });
+        let ai_states = self.list_ai_note_states(course_id)?;
+
+        Ok(note_ids
+            .iter()
+            .filter_map(|note_id| note_lookup.get(note_id))
+            .map(|note| {
+                self.build_exam_source_note(
+                    note,
+                    note_mastery.get(&note.id),
+                    &concept_counts,
+                    &formula_counts,
+                    &ai_states,
+                )
+            })
+            .collect())
+    }
+
+    fn claim_next_exam_generation_job(
+        &self,
+        course_id: &str,
+    ) -> Result<Option<StoredExamGenerationJob>> {
+        let existing_generating = self.find_generating_exam(course_id)?;
+        let exam = if let Some(exam) = existing_generating {
+            exam
+        } else {
+            let queued = self
+                .conn
+                .query_row(
+                    r#"
+                    SELECT id, course_id, title, preset, status, difficulty, question_count, source_note_count,
+                           multiple_choice_count, short_answer_count, time_limit_minutes, source_note_ids_json,
+                           instructions, summary, created_at, updated_at, generated_at, last_error, model
+                    FROM exams
+                    WHERE course_id = ?1 AND status = 'queued'
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    "#,
+                    params![course_id],
+                    |row| self.read_exam_record_row(row),
+                )
+                .optional()?;
+
+            let Some(exam) = queued else {
+                return Ok(None);
+            };
+
+            self.conn.execute(
+                "UPDATE exams SET status = 'generating', updated_at = ?2, last_error = NULL WHERE id = ?1",
+                params![&exam.id, now_string()],
+            )?;
+            self.find_exam_record(&exam.id)?
+                .ok_or_else(|| anyhow!("queued exam disappeared before generation"))?
+        };
+
+        let notes = self.load_exam_generation_notes(&exam.course_id, &exam.source_note_ids)?;
+        if notes.is_empty() {
+            self.fail_exam_generation(&exam.id, "exam source queue snapshot is empty")?;
+            return self.claim_next_exam_generation_job(course_id);
+        }
+
+        Ok(Some(StoredExamGenerationJob { exam, notes }))
+    }
+    
+    fn load_exam_generation_notes(
+        &self,
+        course_id: &str,
+        note_ids: &[String],
+    ) -> Result<Vec<ai::ExamGenerationNoteInput>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id, title, relative_path, excerpt, headings_json, links_json
+            FROM note_records
+            WHERE course_id = ?1
+            "#,
+        )?;
+        let rows = statement
+            .query_map(params![course_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    from_json_vec::<String>(&row.get::<_, String>(4)?),
+                    from_json_vec::<String>(&row.get::<_, String>(5)?),
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let concepts = self
+            .list_concepts(course_id)?
+            .into_iter()
+            .fold(HashMap::<String, Vec<String>>::new(), |mut acc, (note_id, name, _, _)| {
+                acc.entry(note_id).or_default().push(name);
+                acc
+            });
+        let formulas = self
+            .list_formulas(course_id)?
+            .into_iter()
+            .fold(HashMap::<String, Vec<String>>::new(), |mut acc, (note_id, latex, _)| {
+                acc.entry(note_id).or_default().push(latex);
+                acc
+            });
+        let row_lookup = rows
+            .into_iter()
+            .map(|row| (row.0.clone(), row))
+            .collect::<HashMap<_, _>>();
+
+        Ok(note_ids
+            .iter()
+            .filter_map(|note_id| row_lookup.get(note_id))
+            .map(|row| ai::ExamGenerationNoteInput {
+                note_id: row.0.clone(),
+                title: row.1.clone(),
+                relative_path: row.2.clone(),
+                excerpt: row.3.clone(),
+                headings: row.4.clone(),
+                concepts: concepts.get(&row.0).cloned().unwrap_or_default(),
+                formulas: formulas.get(&row.0).cloned().unwrap_or_default(),
+                links: row.5.clone(),
+            })
+            .collect())
+    }
+
+    fn build_exam_source_note(
+        &self,
+        note: &StoredNote,
+        mastery: Option<&StoredNoteMastery>,
+        concept_counts: &HashMap<String, usize>,
+        formula_counts: &HashMap<String, usize>,
+        ai_states: &HashMap<String, StoredAiNoteState>,
+    ) -> ExamSourceNote {
+        ExamSourceNote {
+            note_id: note.id.clone(),
+            title: note.title.clone(),
+            relative_path: note.relative_path.clone(),
+            ai_status: current_ai_status(note, ai_states),
+            mastery_state: mastery
+                .map(|row| row.mastery_state)
+                .unwrap_or(NoteMasteryState::Active),
+            last_accuracy: mastery.and_then(|row| row.last_accuracy),
+            concept_count: concept_counts.get(&note.id).copied().unwrap_or(0),
+            formula_count: formula_counts.get(&note.id).copied().unwrap_or(0),
+        }
+    }
+
+    fn build_exam_summary(&self, record: StoredExamRecord) -> Result<ExamSummary> {
+        let latest_attempt = self
+            .conn
+            .query_row(
+                r#"
+                SELECT submitted_at, score_percent
+                FROM exam_attempts
+                WHERE exam_id = ?1
+                ORDER BY submitted_at DESC
+                LIMIT 1
+                "#,
+                params![&record.id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)),
+            )
+            .optional()?;
+        let attempt_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM exam_attempts WHERE exam_id = ?1",
+            params![&record.id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+
+        Ok(ExamSummary {
+            id: record.id,
+            course_id: record.course_id,
+            title: record.title,
+            preset: record.preset,
+            status: record.status,
+            difficulty: record.difficulty,
+            question_count: record.question_count,
+            source_note_count: record.source_note_count,
+            multiple_choice_count: record.multiple_choice_count,
+            short_answer_count: record.short_answer_count,
+            time_limit_minutes: record.time_limit_minutes,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+            generated_at: record.generated_at,
+            latest_score_percent: latest_attempt.as_ref().map(|(_, score)| *score),
+            latest_attempted_at: latest_attempt.map(|(submitted_at, _)| submitted_at),
+            attempt_count,
+            last_error: record.last_error,
+        })
+    }
+
+    fn store_generated_exam(
+        &self,
+        exam_id: &str,
+        instructions: &str,
+        summary: &str,
+        questions: &[ai::GeneratedExamQuestion],
+        model: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM exam_questions WHERE exam_id = ?1",
+            params![exam_id],
+        )?;
+
+        let created_at = now_string();
+        for (index, question) in questions.iter().enumerate() {
+            self.conn.execute(
+                r#"
+                INSERT INTO exam_questions (
+                  id, exam_id, position, question_type, prompt, options_json, correct_answer,
+                  explanation, source_note_id, source_note_title, created_at
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                "#,
+                params![
+                    Uuid::new_v4().to_string(),
+                    exam_id,
+                    (index + 1) as i64,
+                    exam_question_type_to_str(question.question_type),
+                    question.prompt,
+                    to_json(&question.options),
+                    question.correct_answer,
+                    question.explanation,
+                    question.source_note_id,
+                    question.source_note_title,
+                    created_at,
+                ],
+            )?;
+        }
+
+        self.conn.execute(
+            r#"
+            UPDATE exams
+            SET status = 'ready',
+                instructions = ?2,
+                summary = ?3,
+                updated_at = ?4,
+                generated_at = ?4,
+                last_error = NULL,
+                model = ?5
+            WHERE id = ?1
+            "#,
+            params![exam_id, instructions, summary, created_at, model],
+        )?;
+        Ok(())
+    }
+
+    fn fail_exam_generation(&self, exam_id: &str, message: &str) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE exams
+            SET status = 'failed',
+                updated_at = ?2,
+                generated_at = NULL,
+                last_error = ?3
+            WHERE id = ?1
+            "#,
+            params![exam_id, now_string(), truncate_error(message)],
+        )?;
+        Ok(())
+    }
+
+    fn build_note_suggestions(
+        &self,
+        course_id: &str,
+        note_scores: &HashMap<String, (f64, usize)>,
+    ) -> Result<Vec<ExamReviewSuggestion>> {
+        let source_queue = self
+            .list_exam_source_queue_ids(course_id)?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        let note_lookup = self
+            .list_notes(course_id)?
+            .into_iter()
+            .map(|note| (note.id.clone(), note))
+            .collect::<HashMap<_, _>>();
+        let note_mastery = self.list_note_mastery_by_course(course_id)?;
+
+        let mut suggestions = Vec::new();
+        for (note_id, (earned, total)) in note_scores {
+            let accuracy = round_percentage((earned / (*total).max(1) as f64) * 100.0);
+            let current_state = note_mastery
+                .get(note_id)
+                .map(|row| row.mastery_state)
+                .unwrap_or(NoteMasteryState::Active);
+            let recommended_state = if accuracy >= 80.0 {
+                NoteMasteryState::Mastered
+            } else if accuracy < 60.0 {
+                NoteMasteryState::Review
+            } else {
+                NoteMasteryState::Active
+            };
+            self.upsert_note_mastery(note_id, course_id, current_state, Some(accuracy))?;
+
+            let note = note_lookup
+                .get(note_id)
+                .ok_or_else(|| anyhow!("note {note_id} not found while building exam suggestions"))?;
+            suggestions.push(ExamReviewSuggestion {
+                note_id: note_id.clone(),
+                title: note.title.clone(),
+                relative_path: note.relative_path.clone(),
+                current_state,
+                recommended_state,
+                accuracy,
+                reason: match recommended_state {
+                    NoteMasteryState::Mastered => {
+                        "High accuracy in this attempt. You can safely put this note away for now."
+                            .to_string()
+                    }
+                    NoteMasteryState::Review => {
+                        "Low accuracy in this attempt. Bring this note back into the learning queue."
+                            .to_string()
+                    }
+                    NoteMasteryState::Active => {
+                        "Mixed performance. Keep this note active until recall stabilizes."
+                            .to_string()
+                    }
+                },
+                currently_in_source_queue: source_queue.contains(note_id),
+            });
+        }
+
+        suggestions.sort_by(|left, right| {
+            left.accuracy
+                .total_cmp(&right.accuracy)
+                .then_with(|| left.title.cmp(&right.title))
+        });
+        Ok(suggestions)
+    }
+}
+
+fn default_exam_defaults() -> ExamDefaults {
+    ExamDefaults {
+        preset: ExamPreset::Sprint,
+        multiple_choice_count: 6,
+        short_answer_count: 2,
+        difficulty: ExamDifficulty::Mixed,
+        time_limit_minutes: 10,
+        generate_count: 1,
+    }
+}
+
+fn normalize_exam_builder_input(mut request: ExamBuilderInput) -> Result<ExamBuilderInput> {
+    request.time_limit_minutes = request.time_limit_minutes.max(5);
+    request.generate_count = request.generate_count.clamp(1, 5);
+    if request.multiple_choice_count + request.short_answer_count == 0 {
+        bail!("exam must contain at least one question");
+    }
+    Ok(request)
+}
+
+fn build_exam_builder_input_from_record(record: &StoredExamRecord) -> ExamBuilderInput {
+    ExamBuilderInput {
+        course_id: record.course_id.clone(),
+        preset: record.preset,
+        multiple_choice_count: record.multiple_choice_count,
+        short_answer_count: record.short_answer_count,
+        difficulty: record.difficulty,
+        time_limit_minutes: record.time_limit_minutes,
+        generate_count: 1,
+        title: Some(record.title.clone()),
+    }
+}
+
+fn build_exam_details(
+    exam: StoredExamRecord,
+    questions: Vec<ExamQuestion>,
+    source_notes: Vec<ExamSourceNote>,
+) -> ExamDetails {
+    ExamDetails {
+        id: exam.id,
+        course_id: exam.course_id,
+        title: exam.title,
+        preset: exam.preset,
+        status: exam.status,
+        difficulty: exam.difficulty,
+        time_limit_minutes: exam.time_limit_minutes,
+        question_count: exam.question_count,
+        multiple_choice_count: exam.multiple_choice_count,
+        short_answer_count: exam.short_answer_count,
+        created_at: exam.created_at,
+        updated_at: exam.updated_at,
+        generated_at: exam.generated_at,
+        instructions: exam.instructions,
+        summary: exam.summary,
+        questions,
+        source_notes,
+        last_error: exam.last_error,
+    }
+}
+
+fn exam_preset_label(preset: ExamPreset) -> &'static str {
+    match preset {
+        ExamPreset::Sprint => "Sprint",
+        ExamPreset::Mock => "Mock",
+        ExamPreset::Final => "Final",
+    }
+}
+
+fn empty_answer_for_question(question_type: ExamQuestionType) -> ExamAnswerValue {
+    match question_type {
+        ExamQuestionType::MultipleChoice | ExamQuestionType::ShortAnswer => {
+            ExamAnswerValue::Text(String::new())
+        }
+    }
+}
+
+fn exam_preset_to_str(value: ExamPreset) -> &'static str {
+    match value {
+        ExamPreset::Sprint => "sprint",
+        ExamPreset::Mock => "mock",
+        ExamPreset::Final => "final",
+    }
+}
+
+fn exam_preset_from_str(value: &str) -> Result<ExamPreset> {
+    match value {
+        "sprint" => Ok(ExamPreset::Sprint),
+        "mock" => Ok(ExamPreset::Mock),
+        "final" => Ok(ExamPreset::Final),
+        _ => Err(anyhow!("unknown exam preset `{value}`")),
+    }
+}
+
+fn exam_difficulty_to_str(value: ExamDifficulty) -> &'static str {
+    match value {
+        ExamDifficulty::Easy => "easy",
+        ExamDifficulty::Mixed => "mixed",
+        ExamDifficulty::Hard => "hard",
+    }
+}
+
+fn exam_difficulty_from_str(value: &str) -> Result<ExamDifficulty> {
+    match value {
+        "easy" => Ok(ExamDifficulty::Easy),
+        "mixed" => Ok(ExamDifficulty::Mixed),
+        "hard" => Ok(ExamDifficulty::Hard),
+        _ => Err(anyhow!("unknown exam difficulty `{value}`")),
+    }
+}
+
+fn exam_status_to_str(value: ExamStatus) -> &'static str {
+    match value {
+        ExamStatus::Queued => "queued",
+        ExamStatus::Generating => "generating",
+        ExamStatus::Ready => "ready",
+        ExamStatus::Failed => "failed",
+    }
+}
+
+fn exam_status_from_str(value: &str) -> Result<ExamStatus> {
+    match value {
+        "queued" => Ok(ExamStatus::Queued),
+        "generating" => Ok(ExamStatus::Generating),
+        "ready" => Ok(ExamStatus::Ready),
+        "failed" => Ok(ExamStatus::Failed),
+        _ => Err(anyhow!("unknown exam status `{value}`")),
+    }
+}
+
+fn exam_question_type_to_str(value: ExamQuestionType) -> &'static str {
+    match value {
+        ExamQuestionType::MultipleChoice => "multiple-choice",
+        ExamQuestionType::ShortAnswer => "short-answer",
+    }
+}
+
+fn exam_question_type_from_str(value: &str) -> Result<ExamQuestionType> {
+    match value {
+        "multiple-choice" => Ok(ExamQuestionType::MultipleChoice),
+        "short-answer" => Ok(ExamQuestionType::ShortAnswer),
+        _ => Err(anyhow!("unknown exam question type `{value}`")),
+    }
+}
+
+fn note_mastery_state_to_str(value: NoteMasteryState) -> &'static str {
+    match value {
+        NoteMasteryState::Active => "active",
+        NoteMasteryState::Review => "review",
+        NoteMasteryState::Mastered => "mastered",
+    }
+}
+
+fn note_mastery_state_from_str(value: &str) -> Result<NoteMasteryState> {
+    match value {
+        "active" => Ok(NoteMasteryState::Active),
+        "review" => Ok(NoteMasteryState::Review),
+        "mastered" => Ok(NoteMasteryState::Mastered),
+        _ => Err(anyhow!("unknown note mastery state `{value}`")),
+    }
+}
+
+fn exam_verdict_to_str(value: ExamVerdict) -> &'static str {
+    match value {
+        ExamVerdict::Correct => "correct",
+        ExamVerdict::Partial => "partial",
+        ExamVerdict::Incorrect => "incorrect",
+    }
+}
+
+fn to_sql_error(error: anyhow::Error) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(
+        0,
+        rusqlite::types::Type::Text,
+        Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            error.to_string(),
+        )),
+    )
+}
+
 fn build_countdown(course: &StoredCourse, notes: &[StoredNote]) -> Countdown {
     let exam_date = course.exam_date.clone().or_else(|| {
         notes
@@ -3028,7 +4545,11 @@ mod tests {
     use tempfile::tempdir;
 
     use super::Database;
-    use crate::models::{CourseConfigInput, FlashcardGenerationRequest, RevisionNoteRequest};
+    use crate::models::{
+        AiSettingsInput, ApplyExamReviewActionsRequest, CourseConfigInput, ExamBuilderInput,
+        ExamDifficulty, ExamPreset, ExamReviewAction, ExamSubmissionRequest,
+        FlashcardGenerationRequest, NoteMasteryState, RevisionNoteRequest,
+    };
 
     #[test]
     fn scan_detects_changes_and_outputs_files() {
@@ -3106,5 +4627,235 @@ mod tests {
             })
             .expect("revision");
         assert!(PathBuf::from(revision.note_path).exists());
+    }
+
+    #[test]
+    fn exam_generation_grading_and_review_actions_persist() {
+        let temp = tempdir().expect("temp dir");
+        let db_path = temp.path().join("exam-os.sqlite");
+        let course_id = setup_exam_course(temp.path());
+
+        let database = Database::open(&db_path).expect("database");
+        database
+            .connect_vault(temp.path().join("vault").to_string_lossy().as_ref())
+            .expect("connect vault");
+        let saved_course_id = database
+            .save_course_config(CourseConfigInput {
+                id: Some(course_id.clone()),
+                name: "Math".to_string(),
+                folder: "math".to_string(),
+                exam_date: Some("2026-07-01".to_string()),
+                revision_folder: None,
+                flashcards_folder: None,
+            })
+            .expect("save course");
+        assert_eq!(saved_course_id, course_id);
+        database.run_scan().expect("scan");
+        let note_ids = database
+            .get_dashboard(Some(course_id.clone()))
+            .expect("dashboard")
+            .expect("dashboard present")
+            .notes
+            .into_iter()
+            .map(|note| note.id)
+            .collect::<Vec<_>>();
+        database
+            .save_ai_settings(AiSettingsInput {
+                base_url: "mock://exam".to_string(),
+                model: "mock-model".to_string(),
+                api_key: None,
+                enabled: true,
+                timeout_ms: Some(2_000),
+            })
+            .expect("save ai settings");
+
+        let queued_workspace = database
+            .add_exam_source_notes(&course_id, &note_ids[..2])
+            .expect("queue source notes");
+        assert_eq!(queued_workspace.source_queue.len(), 2);
+
+        let queue_request = ExamBuilderInput {
+            course_id: course_id.clone(),
+            preset: ExamPreset::Sprint,
+            multiple_choice_count: 2,
+            short_answer_count: 1,
+            difficulty: ExamDifficulty::Mixed,
+            time_limit_minutes: 10,
+            generate_count: 2,
+            title: None,
+        };
+        let workspace_after_queue = database.queue_exams(queue_request).expect("queue exams");
+        assert_eq!(workspace_after_queue.summary.queued_count, 2);
+
+        database
+            .run_exam_generation_queue(&course_id)
+            .expect("generate exams");
+        let workspace_ready = database
+            .get_exam_workspace(Some(course_id.clone()))
+            .expect("workspace")
+            .expect("workspace present");
+        assert_eq!(workspace_ready.summary.ready_count, 2);
+        assert_eq!(workspace_ready.ready_exams.len(), 2);
+
+        let exam_id = workspace_ready.ready_exams[0].id.clone();
+        let public_details = database.get_exam_details(&exam_id).expect("exam details");
+        assert!(
+            public_details
+                .questions
+                .iter()
+                .all(|question| question.expected_answer.is_none() && question.explanation.is_none())
+        );
+
+        let stored_questions = database
+            .load_exam_questions(&exam_id, false)
+            .expect("stored questions");
+        let mastered_note_id = stored_questions[0].source_note_id.clone();
+        let answers = stored_questions
+            .iter()
+            .map(|question| {
+                let answer = if question.source_note_id == mastered_note_id {
+                    question
+                        .expected_answer
+                        .clone()
+                        .expect("stored answer key should be present")
+                } else {
+                    String::new()
+                };
+                crate::models::ExamAnswerInput {
+                    question_id: question.id.clone(),
+                    answer: crate::models::ExamAnswerValue::Text(answer),
+                }
+            })
+            .collect();
+
+        let attempt = database
+            .submit_exam_attempt(ExamSubmissionRequest { exam_id, answers })
+            .expect("submit exam");
+        assert_eq!(attempt.note_suggestions.len(), 2);
+        assert!(
+            attempt
+                .note_suggestions
+                .iter()
+                .any(|suggestion| suggestion.recommended_state == NoteMasteryState::Mastered)
+        );
+        assert!(
+            attempt
+                .note_suggestions
+                .iter()
+                .any(|suggestion| suggestion.recommended_state == NoteMasteryState::Review)
+        );
+
+        let review_actions = attempt
+            .note_suggestions
+            .iter()
+            .map(|suggestion| ExamReviewAction {
+                note_id: suggestion.note_id.clone(),
+                next_state: suggestion.recommended_state,
+                add_to_exam_queue: suggestion.recommended_state == NoteMasteryState::Review,
+            })
+            .collect::<Vec<_>>();
+        let updated_workspace = database
+            .apply_exam_review_actions(ApplyExamReviewActionsRequest {
+                attempt_id: attempt.attempt_id.clone(),
+                actions: review_actions,
+            })
+            .expect("apply review actions");
+
+        assert_eq!(updated_workspace.summary.review_count, 1);
+        assert_eq!(updated_workspace.summary.mastered_count, 1);
+        assert_eq!(updated_workspace.history.len(), 1);
+        assert!(
+            updated_workspace
+                .review_notes
+                .iter()
+                .any(|note| note.note_id != mastered_note_id)
+        );
+        assert!(
+            updated_workspace
+                .mastered_notes
+                .iter()
+                .any(|note| note.note_id == mastered_note_id)
+        );
+
+        let reopened = Database::open(&db_path).expect("reopen database");
+        let reopened_workspace = reopened
+            .get_exam_workspace(Some(course_id))
+            .expect("reopened workspace")
+            .expect("reopened workspace present");
+        assert_eq!(reopened_workspace.summary.ready_count, 2);
+        assert_eq!(reopened_workspace.summary.review_count, 1);
+        assert_eq!(reopened_workspace.summary.mastered_count, 1);
+        assert_eq!(reopened_workspace.history.len(), 1);
+    }
+
+    #[test]
+    fn queue_exams_requires_enabled_ai() {
+        let temp = tempdir().expect("temp dir");
+        let db_path = temp.path().join("exam-os.sqlite");
+        let course_id = setup_exam_course(temp.path());
+
+        let database = Database::open(&db_path).expect("database");
+        database
+            .connect_vault(temp.path().join("vault").to_string_lossy().as_ref())
+            .expect("connect vault");
+        database
+            .save_course_config(CourseConfigInput {
+                id: Some(course_id.clone()),
+                name: "Math".to_string(),
+                folder: "math".to_string(),
+                exam_date: None,
+                revision_folder: None,
+                flashcards_folder: None,
+            })
+            .expect("save course");
+        database.run_scan().expect("scan");
+        let note_ids = database
+            .get_dashboard(Some(course_id.clone()))
+            .expect("dashboard")
+            .expect("dashboard present")
+            .notes
+            .into_iter()
+            .map(|note| note.id)
+            .collect::<Vec<_>>();
+        database
+            .add_exam_source_notes(&course_id, &note_ids[..1])
+            .expect("queue source note");
+
+        let error = database
+            .queue_exams(ExamBuilderInput {
+                course_id,
+                preset: ExamPreset::Sprint,
+                multiple_choice_count: 1,
+                short_answer_count: 1,
+                difficulty: ExamDifficulty::Mixed,
+                time_limit_minutes: 10,
+                generate_count: 1,
+                title: None,
+            })
+            .expect_err("queueing should fail without AI");
+        assert!(error.to_string().contains("enable AI"));
+    }
+
+    fn setup_exam_course(root: &std::path::Path) -> String {
+        let vault_dir = root.join("vault");
+        let course_dir = vault_dir.join("math");
+        fs::create_dir_all(&course_dir).expect("course dir");
+        fs::write(
+            course_dir.join("limits.md"),
+            "# Limits\n\nLimits describe how a function behaves near a point.\n[[continuity]]",
+        )
+        .expect("write limits");
+        fs::write(
+            course_dir.join("continuity.md"),
+            "# Continuity\n\nContinuity means no jumps in the function graph.\n[[limits]]",
+        )
+        .expect("write continuity");
+        fs::write(
+            course_dir.join("derivatives.md"),
+            "# Derivatives\n\nDerivatives measure instantaneous rate of change.",
+        )
+        .expect("write derivatives");
+
+        "course::math".to_string()
     }
 }

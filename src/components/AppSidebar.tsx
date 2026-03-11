@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { ArrowDownToLine, BarChart2, BookOpen, BrainCircuit, FolderGit2, Settings, TerminalSquare } from "lucide-react";
+import { ArrowDownToLine, BarChart2, BookOpen, BrainCircuit, ClipboardCheck, FolderGit2, Settings, TerminalSquare } from "lucide-react";
 import { formatDate, shortenPath } from "../lib";
 import type { CourseConfig } from "../types";
 import { APP_VIEWS, type AppView } from "./appShell";
@@ -8,6 +8,7 @@ import { BrandMark } from "./BrandMark";
 const VIEW_ICONS: Record<AppView, React.ElementType> = {
   overview: BarChart2,
   ai: BrainCircuit,
+  exams: ClipboardCheck,
   logs: TerminalSquare,
   notes: BookOpen,
   outputs: ArrowDownToLine,
@@ -27,7 +28,7 @@ type AppSidebarProps = {
   onSelectCourse: (courseId: string) => void;
 };
 
-const STUDY_VIEWS: AppView[] = ["overview", "ai", "logs", "notes", "outputs"];
+const STUDY_VIEWS: AppView[] = ["overview", "ai", "exams", "logs", "notes", "outputs"];
 const CONFIG_VIEWS: AppView[] = ["courses", "settings"];
 
 export function AppSidebar({

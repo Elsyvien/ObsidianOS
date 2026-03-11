@@ -1,6 +1,8 @@
 import type {
   AiSettingsInput,
   CourseConfig,
+  ExamBuilderInput,
+  ExamDefaults,
   WorkspaceSnapshot,
 } from "./types";
 
@@ -37,6 +39,27 @@ export const DEFAULT_AI_SETTINGS: AiSettingsInput = {
   enabled: false,
   timeoutMs: 30000,
 };
+
+export const DEFAULT_EXAM_DEFAULTS: ExamDefaults = {
+  preset: "sprint",
+  multipleChoiceCount: 6,
+  shortAnswerCount: 2,
+  difficulty: "mixed",
+  timeLimitMinutes: 10,
+  generateCount: 1,
+};
+
+export function createExamBuilderInput(courseId: string, defaults: ExamDefaults): ExamBuilderInput {
+  return {
+    courseId,
+    preset: defaults.preset,
+    multipleChoiceCount: defaults.multipleChoiceCount,
+    shortAnswerCount: defaults.shortAnswerCount,
+    difficulty: defaults.difficulty,
+    timeLimitMinutes: defaults.timeLimitMinutes,
+    generateCount: defaults.generateCount,
+  };
+}
 
 export function createCourseDraft(course?: CourseConfig): CourseDraft {
   return {

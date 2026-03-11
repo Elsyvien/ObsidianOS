@@ -10,9 +10,11 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use db::Database;
 use models::{
-    AiCourseSummary, AiNoteInsight, AiSettingsInput, CourseConfigInput, DashboardData,
-    FlashcardGenerationRequest, FlashcardGenerationResult, NoteDetails, RevisionNoteRequest,
-    RevisionNoteResult, ScanReport, ValidationResult, WorkspaceSnapshot,
+    AiCourseSummary, AiNoteInsight, AiSettingsInput, ApplyExamReviewActionsRequest,
+    CourseConfigInput, DashboardData, ExamAttemptResult, ExamDetails, ExamBuilderInput,
+    ExamSubmissionRequest, ExamWorkspaceSnapshot, FlashcardGenerationRequest,
+    FlashcardGenerationResult, NoteDetails, RevisionNoteRequest, RevisionNoteResult, ScanReport,
+    ValidationResult, WorkspaceSnapshot,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -22,6 +24,7 @@ struct AppState {
     db_path: PathBuf,
     export_dir: PathBuf,
     active_ai_courses: Arc<Mutex<HashSet<String>>>,
+    active_exam_courses: Arc<Mutex<HashSet<String>>>,
 }
 
 #[derive(Serialize)]
@@ -251,6 +254,141 @@ async fn generate_revision_note(
     .await
 }
 
+#[tauri::command]
+async fn get_exam_workspace(
+    course_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Option<ExamWorkspaceSnapshot>, String> {
+    let state = state.inner().clone();
+    let workspace = blocking({
+        let state = state.clone();
+        let course_id = course_id.clone();
+        move || {
+            let database = Database::open(&state.db_path)?;
+            database.get_exam_workspace(course_id)
+        }
+    })
+    .await?;
+
+    if let Some(course_id) = workspace.as_ref().map(|snapshot| snapshot.course_id.clone()) {
+        let should_spawn = blocking({
+            let state = state.clone();
+            let course_id = course_id.clone();
+            move || {
+                let database = Database::open(&state.db_path)?;
+                database.has_pending_exam_jobs(&course_id)
+            }
+        })
+        .await?;
+
+        if should_spawn {
+            spawn_exam_generation_thread(state, course_id)?;
+        }
+    }
+
+    Ok(workspace)
+}
+
+#[tauri::command]
+async fn add_exam_source_notes(
+    course_id: String,
+    note_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<ExamWorkspaceSnapshot, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.add_exam_source_notes(&course_id, &note_ids)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn remove_exam_source_notes(
+    course_id: String,
+    note_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<ExamWorkspaceSnapshot, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.remove_exam_source_notes(&course_id, &note_ids)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn clear_exam_source_queue(
+    course_id: String,
+    state: State<'_, AppState>,
+) -> Result<ExamWorkspaceSnapshot, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.clear_exam_source_queue(&course_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn queue_exams(
+    request: ExamBuilderInput,
+    state: State<'_, AppState>,
+) -> Result<ExamWorkspaceSnapshot, String> {
+    let state = state.inner().clone();
+    let course_id = request.course_id.clone();
+    let workspace = blocking({
+        let state = state.clone();
+        move || {
+            let database = Database::open(&state.db_path)?;
+            database.queue_exams(request)
+        }
+    })
+    .await?;
+
+    spawn_exam_generation_thread(state, course_id)?;
+    Ok(workspace)
+}
+
+#[tauri::command]
+async fn get_exam_details(
+    exam_id: String,
+    state: State<'_, AppState>,
+) -> Result<ExamDetails, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.get_exam_details(&exam_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn submit_exam_attempt(
+    request: ExamSubmissionRequest,
+    state: State<'_, AppState>,
+) -> Result<ExamAttemptResult, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.submit_exam_attempt(request)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn apply_exam_review_actions(
+    request: ApplyExamReviewActionsRequest,
+    state: State<'_, AppState>,
+) -> Result<ExamWorkspaceSnapshot, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.apply_exam_review_actions(request)
+    })
+    .await
+}
+
 async fn blocking<T, F>(operation: F) -> Result<T, String>
 where
     T: Send + 'static,
@@ -300,6 +438,41 @@ fn spawn_ai_enrichment_thread(
     Ok(())
 }
 
+fn spawn_exam_generation_thread(state: AppState, course_id: String) -> Result<(), String> {
+    let should_spawn = {
+        let mut active = state
+            .active_exam_courses
+            .lock()
+            .map_err(|_| "failed to lock exam course registry".to_string())?;
+        active.insert(course_id.clone())
+    };
+
+    if !should_spawn {
+        return Ok(());
+    }
+
+    let state_for_thread = state.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<()> {
+            let database = Database::open(&state_for_thread.db_path)?;
+            database.run_exam_generation_queue(&course_id)
+        })();
+
+        if let Err(error) = result {
+            if let Ok(database) = Database::open(&state_for_thread.db_path) {
+                let _ = database.mark_exam_generation_failed(&course_id, &error.to_string());
+            }
+            eprintln!("Exam generation failed for {course_id}: {error}");
+        }
+
+        if let Ok(mut active) = state_for_thread.active_exam_courses.lock() {
+            active.remove(&course_id);
+        }
+    });
+
+    Ok(())
+}
+
 fn build_state(app: &AppHandle) -> Result<AppState> {
     let app_data_dir = app
         .path()
@@ -310,6 +483,7 @@ fn build_state(app: &AppHandle) -> Result<AppState> {
         db_path: app_data_dir.join("obsidian-exam-os.sqlite"),
         export_dir,
         active_ai_courses: Arc::new(Mutex::new(HashSet::new())),
+        active_exam_courses: Arc::new(Mutex::new(HashSet::new())),
     })
 }
 
@@ -336,7 +510,15 @@ pub fn run() {
             save_ai_settings,
             validate_ai_settings,
             generate_flashcards,
-            generate_revision_note
+            generate_revision_note,
+            get_exam_workspace,
+            add_exam_source_notes,
+            remove_exam_source_notes,
+            clear_exam_source_queue,
+            queue_exams,
+            get_exam_details,
+            submit_exam_attempt,
+            apply_exam_review_actions
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

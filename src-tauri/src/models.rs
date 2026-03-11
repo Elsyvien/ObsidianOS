@@ -122,6 +122,281 @@ pub struct RevisionSummary {
     pub item_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExamPreset {
+    Sprint,
+    Mock,
+    Final,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExamDifficulty {
+    Easy,
+    Mixed,
+    Hard,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExamStatus {
+    Queued,
+    Generating,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ExamQuestionType {
+    #[serde(rename = "multiple-choice")]
+    MultipleChoice,
+    #[serde(rename = "short-answer")]
+    ShortAnswer,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NoteMasteryState {
+    Active,
+    Review,
+    Mastered,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExamVerdict {
+    Correct,
+    Partial,
+    Incorrect,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum ExamAnswerValue {
+    Text(String),
+    Many(Vec<String>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamDefaults {
+    pub preset: ExamPreset,
+    pub multiple_choice_count: usize,
+    pub short_answer_count: usize,
+    pub difficulty: ExamDifficulty,
+    pub time_limit_minutes: usize,
+    pub generate_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamBuilderInput {
+    pub course_id: String,
+    pub preset: ExamPreset,
+    pub multiple_choice_count: usize,
+    pub short_answer_count: usize,
+    pub difficulty: ExamDifficulty,
+    pub time_limit_minutes: usize,
+    pub generate_count: usize,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamSourceNote {
+    pub note_id: String,
+    pub title: String,
+    pub relative_path: String,
+    pub ai_status: String,
+    pub mastery_state: NoteMasteryState,
+    pub last_accuracy: Option<f64>,
+    pub concept_count: usize,
+    pub formula_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamSummary {
+    pub id: String,
+    pub course_id: String,
+    pub title: String,
+    pub preset: ExamPreset,
+    pub status: ExamStatus,
+    pub difficulty: ExamDifficulty,
+    pub question_count: usize,
+    pub source_note_count: usize,
+    pub multiple_choice_count: usize,
+    pub short_answer_count: usize,
+    pub time_limit_minutes: usize,
+    pub created_at: String,
+    pub updated_at: String,
+    pub generated_at: Option<String>,
+    pub latest_score_percent: Option<f64>,
+    pub latest_attempted_at: Option<String>,
+    pub attempt_count: usize,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamQuestion {
+    pub id: String,
+    pub exam_id: String,
+    pub index: usize,
+    #[serde(rename = "type")]
+    pub question_type: ExamQuestionType,
+    pub prompt: String,
+    pub options: Vec<String>,
+    pub source_note_id: String,
+    pub source_note_title: String,
+    pub expected_answer: Option<String>,
+    pub explanation: Option<String>,
+    pub user_answer: Option<ExamAnswerValue>,
+    pub is_correct: Option<bool>,
+    pub feedback: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamDetails {
+    pub id: String,
+    pub course_id: String,
+    pub title: String,
+    pub preset: ExamPreset,
+    pub status: ExamStatus,
+    pub difficulty: ExamDifficulty,
+    pub time_limit_minutes: usize,
+    pub question_count: usize,
+    pub multiple_choice_count: usize,
+    pub short_answer_count: usize,
+    pub created_at: String,
+    pub updated_at: String,
+    pub generated_at: Option<String>,
+    pub instructions: String,
+    pub summary: String,
+    pub questions: Vec<ExamQuestion>,
+    pub source_notes: Vec<ExamSourceNote>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamAnswerInput {
+    pub question_id: String,
+    pub answer: ExamAnswerValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamSubmissionRequest {
+    pub exam_id: String,
+    pub answers: Vec<ExamAnswerInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamQuestionResult {
+    pub question_id: String,
+    pub index: usize,
+    #[serde(rename = "type")]
+    pub question_type: ExamQuestionType,
+    pub prompt: String,
+    pub options: Vec<String>,
+    pub source_note_id: String,
+    pub source_note_title: String,
+    pub user_answer: ExamAnswerValue,
+    pub verdict: ExamVerdict,
+    pub is_correct: bool,
+    pub expected_answer: String,
+    pub explanation: String,
+    pub feedback: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamReviewSuggestion {
+    pub note_id: String,
+    pub title: String,
+    pub relative_path: String,
+    pub current_state: NoteMasteryState,
+    pub recommended_state: NoteMasteryState,
+    pub accuracy: f64,
+    pub reason: String,
+    pub currently_in_source_queue: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamAttemptResult {
+    pub exam_id: String,
+    pub attempt_id: String,
+    pub submitted_at: String,
+    pub score_percent: f64,
+    pub correct_count: usize,
+    pub partial_count: usize,
+    pub incorrect_count: usize,
+    pub overall_feedback: String,
+    pub question_results: Vec<ExamQuestionResult>,
+    pub note_suggestions: Vec<ExamReviewSuggestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamReviewAction {
+    pub note_id: String,
+    pub next_state: NoteMasteryState,
+    pub add_to_exam_queue: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyExamReviewActionsRequest {
+    pub attempt_id: String,
+    pub actions: Vec<ExamReviewAction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamAttemptSummary {
+    pub id: String,
+    pub exam_id: String,
+    pub exam_title: String,
+    pub submitted_at: String,
+    pub score_percent: f64,
+    pub correct_count: usize,
+    pub partial_count: usize,
+    pub incorrect_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamWorkspaceSummary {
+    pub source_queue_count: usize,
+    pub queued_count: usize,
+    pub generating_count: usize,
+    pub ready_count: usize,
+    pub failed_count: usize,
+    pub review_count: usize,
+    pub mastered_count: usize,
+    pub latest_attempted_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExamWorkspaceSnapshot {
+    pub course_id: String,
+    pub defaults: ExamDefaults,
+    pub source_queue: Vec<ExamSourceNote>,
+    pub queued_exams: Vec<ExamSummary>,
+    pub ready_exams: Vec<ExamSummary>,
+    pub failed_exams: Vec<ExamSummary>,
+    pub history: Vec<ExamAttemptSummary>,
+    pub review_notes: Vec<ExamSourceNote>,
+    pub mastered_notes: Vec<ExamSourceNote>,
+    pub summary: ExamWorkspaceSummary,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NoteSummary {
@@ -149,6 +424,7 @@ pub struct DashboardData {
     pub formulas: Vec<FormulaMetric>,
     pub flashcards: FlashcardSummary,
     pub revision: RevisionSummary,
+    pub exams: ExamWorkspaceSummary,
     pub notes: Vec<NoteSummary>,
     pub ai: AiCourseSummary,
 }

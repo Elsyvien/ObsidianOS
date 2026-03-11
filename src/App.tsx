@@ -1,10 +1,15 @@
 import { startTransition, useDeferredValue, useEffect, useState } from "react";
 import "./App.css";
 import {
+  addExamSourceNotes,
+  applyExamReviewActions,
   chooseVaultDirectory,
+  clearExamSourceQueue,
   connectVault,
   deleteCourse,
   disconnectVault,
+  getExamDetails,
+  getExamWorkspace,
   generateFlashcards,
   generateNoteAiInsight,
   generateRevisionNote,
@@ -12,29 +17,42 @@ import {
   getDashboard,
   getNoteDetails,
   loadWorkspace,
+  queueExams,
+  removeExamSourceNotes,
   runScan,
   saveAiSettings,
   saveCourseConfig,
   startAiEnrichment,
+  submitExamAttempt,
   validateAiSettings,
 } from "./api";
 import { AppSidebar } from "./components/AppSidebar";
+import { ExamsWorkspace } from "./components/ExamsWorkspace";
 import { InspectorPane } from "./components/InspectorPane";
 import { MainPane } from "./components/MainPane";
 import { type AppView, type NoteFilter, getViewMeta } from "./components/appShell";
 import { Topbar } from "./components/Topbar";
 import {
   createCourseDraft,
+  createExamBuilderInput,
   DEFAULT_AI_SETTINGS,
+  DEFAULT_EXAM_DEFAULTS,
   EMPTY_WORKSPACE,
   getErrorMessage,
   type BannerState,
   type CourseDraft,
 } from "./lib";
 import type {
+  ApplyExamReviewActionsRequest,
   ActivityLogEntry,
   AiSettingsInput,
   CourseConfigInput,
+  ExamAttemptResult,
+  ExamBuilderInput,
+  ExamDefaults,
+  ExamDetails,
+  ExamWorkspaceSnapshot,
+  ExamSubmissionRequest,
   FlashcardGenerationResult,
   NoteDetails,
   RevisionNoteResult,
@@ -64,6 +82,27 @@ function App() {
   const [flashcardResult, setFlashcardResult] = useState<FlashcardGenerationResult | null>(null);
   const [revisionResult, setRevisionResult] = useState<RevisionNoteResult | null>(null);
   const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([]);
+  const [examWorkspace, setExamWorkspace] = useState<ExamWorkspaceSnapshot | null>(null);
+  const [selectedExamId, setSelectedExamId] = useState<string | null>(null);
+  const [examDetails, setExamDetails] = useState<ExamDetails | null>(null);
+  const [examAttemptResult, setExamAttemptResult] = useState<ExamAttemptResult | null>(null);
+  const [examDefaults, setExamDefaults] = useState<ExamDefaults>(() => {
+    if (typeof window === "undefined") {
+      return DEFAULT_EXAM_DEFAULTS;
+    }
+
+    const raw = window.localStorage.getItem("obsidian-exam-os.exam-defaults");
+    if (!raw) {
+      return DEFAULT_EXAM_DEFAULTS;
+    }
+
+    try {
+      return { ...DEFAULT_EXAM_DEFAULTS, ...JSON.parse(raw) } as ExamDefaults;
+    } catch {
+      return DEFAULT_EXAM_DEFAULTS;
+    }
+  });
+  const [examDraft, setExamDraft] = useState<ExamBuilderInput | null>(null);
 
   const deferredCourseId = useDeferredValue(selectedCourseId);
   const dashboard = workspace.dashboard;
@@ -94,6 +133,25 @@ function App() {
         : DEFAULT_AI_SETTINGS,
     );
   }, [workspace.aiSettings]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem("obsidian-exam-os.exam-defaults", JSON.stringify(examDefaults));
+  }, [examDefaults]);
+
+  useEffect(() => {
+    if (!selectedCourseId) {
+      setExamDraft(null);
+      return;
+    }
+
+    setExamDraft((current) =>
+      current?.courseId === selectedCourseId ? current : createExamBuilderInput(selectedCourseId, examDefaults),
+    );
+  }, [examDefaults, selectedCourseId]);
 
   useEffect(() => {
     if (!workspace.vault && !isPreview) {
@@ -143,6 +201,30 @@ function App() {
   }, [deferredCourseId, isPreview, workspace.dashboard?.selectedCourseId, workspace.vault]);
 
   useEffect(() => {
+    if ((!workspace.vault && !isPreview) || !selectedCourseId) {
+      setExamWorkspace(null);
+      return;
+    }
+
+    let cancelled = false;
+    void getExamWorkspace(selectedCourseId)
+      .then((nextWorkspace) => {
+        if (!cancelled) {
+          setExamWorkspace(nextWorkspace);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorBanner("Exam workspace failed to load", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPreview, selectedCourseId, workspace.vault]);
+
+  useEffect(() => {
     const availableNoteIds = new Set(dashboard?.notes.map((note) => note.id) ?? []);
     setSelectedNoteIds((current) => current.filter((noteId) => availableNoteIds.has(noteId)));
 
@@ -156,6 +238,31 @@ function App() {
       setSelectedNoteId(dashboard.notes[0].id);
     }
   }, [activeView, dashboard, selectedNoteId]);
+
+  useEffect(() => {
+    if (!selectedExamId) {
+      setExamDetails(null);
+      setExamAttemptResult(null);
+      return;
+    }
+
+    let cancelled = false;
+    void getExamDetails(selectedExamId)
+      .then((details) => {
+        if (!cancelled) {
+          setExamDetails(details);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorBanner("Exam details unavailable", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedExamId]);
 
   useEffect(() => {
     if (!selectedNoteId) {
@@ -186,6 +293,21 @@ function App() {
       setCourseDraft(createCourseDraft());
     }
   }, [courseDraft.id, workspace.courses]);
+
+  useEffect(() => {
+    const availableExamIds = new Set(
+      [
+        ...(examWorkspace?.queuedExams ?? []),
+        ...(examWorkspace?.readyExams ?? []),
+        ...(examWorkspace?.failedExams ?? []),
+      ].map((exam) => exam.id),
+    );
+    if (selectedExamId && !availableExamIds.has(selectedExamId)) {
+      setSelectedExamId(null);
+      setExamDetails(null);
+      setExamAttemptResult(null);
+    }
+  }, [examWorkspace, selectedExamId]);
 
   useEffect(() => {
     if (!workspace.vault || !selectedCourseId || !aiIsRunning) {
@@ -230,6 +352,50 @@ function App() {
     };
   }, [aiIsRunning, selectedCourseId, selectedNoteId, workspace.vault]);
 
+  useEffect(() => {
+    if (!selectedCourseId || !examWorkspace) {
+      return;
+    }
+
+    const isExamGenerating = examWorkspace.summary.queuedCount > 0 || examWorkspace.summary.generatingCount > 0;
+    if (!isExamGenerating) {
+      return;
+    }
+
+    let cancelled = false;
+    const refresh = () => {
+      void getExamWorkspace(selectedCourseId)
+        .then((nextWorkspace) => {
+          if (!cancelled) {
+            setExamWorkspace(nextWorkspace);
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setErrorBanner("Exam refresh failed", error);
+          }
+        });
+
+      if (selectedExamId) {
+        void getExamDetails(selectedExamId)
+          .then((details) => {
+            if (!cancelled) {
+              setExamDetails(details);
+            }
+          })
+          .catch(() => {
+            // Keep current exam view stable during generation.
+          });
+      }
+    };
+
+    const interval = window.setInterval(refresh, 1800);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [examWorkspace, selectedCourseId, selectedExamId]);
+
   async function refreshWorkspace() {
     try {
       const snapshot = await loadWorkspace();
@@ -258,6 +424,10 @@ function App() {
     setFlashcardResult(null);
     setRevisionResult(null);
     setNoteDetails(null);
+    setExamWorkspace(null);
+    setSelectedExamId(null);
+    setExamDetails(null);
+    setExamAttemptResult(null);
     const nextCourseId =
       next.selectedCourseId ??
       (selectedCourseId && next.courses.some((course) => course.id === selectedCourseId)
@@ -368,6 +538,32 @@ function App() {
     setAiDraft((current) => ({ ...current, [field]: value }));
   }
 
+  function updateExamDefaultField<K extends keyof ExamDefaults>(field: K, value: ExamDefaults[K]) {
+    setExamDefaults((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateExamDraftField<K extends keyof ExamBuilderInput>(field: K, value: ExamBuilderInput[K]) {
+    setExamDraft((current) => (current ? { ...current, [field]: value } : current));
+  }
+
+  function applyExamPreset(preset: "sprint" | "mock" | "final") {
+    const presets = {
+      sprint: { multipleChoiceCount: 6, shortAnswerCount: 2, difficulty: "mixed", timeLimitMinutes: 10, generateCount: 1 },
+      mock: { multipleChoiceCount: 14, shortAnswerCount: 6, difficulty: "mixed", timeLimitMinutes: 25, generateCount: 1 },
+      final: { multipleChoiceCount: 24, shortAnswerCount: 16, difficulty: "hard", timeLimitMinutes: 45, generateCount: 1 },
+    } as const;
+
+    setExamDraft((current) =>
+      current
+        ? {
+            ...current,
+            preset,
+            ...presets[preset],
+          }
+        : current,
+    );
+  }
+
   function resetCourseDraft() {
     setCourseDraft(createCourseDraft(selectedCourse ?? undefined));
   }
@@ -375,6 +571,10 @@ function App() {
   function startNewCourse() {
     setCourseDraft(createCourseDraft());
     setActiveView("courses");
+  }
+
+  function previewExamNote(noteId: string) {
+    setSelectedNoteId(noteId);
   }
 
   const connect = () => {
@@ -633,6 +833,160 @@ function App() {
     });
   };
 
+  const refreshExamWorkspace = (courseId = selectedCourseId) => {
+    if (!courseId) {
+      return Promise.resolve(null);
+    }
+
+    return getExamWorkspace(courseId).then((next) => {
+      setExamWorkspace(next);
+      return next;
+    });
+  };
+
+  const addQueuedNotesToExamQueue = () => {
+    if (!selectedCourseId || selectedNoteIds.length === 0) {
+      showBanner({
+        tone: "error",
+        title: "Select notes first",
+        detail: "Queue one or more notes in Notes or AI before adding them to the exam source queue.",
+      }, "Exams");
+      return;
+    }
+
+    void runBusyTask(
+      "Exam source queue update failed",
+      () => addExamSourceNotes(selectedCourseId, selectedNoteIds),
+      (nextWorkspace) => {
+        setExamWorkspace(nextWorkspace);
+        showBanner({
+          tone: "success",
+          title: "Exam source queue updated",
+          detail: `${selectedNoteIds.length} notes were added to the exam source queue.`,
+        }, "Exams");
+      },
+    );
+  };
+
+  const addNotesToExamQueue = (noteIds: string[]) => {
+    if (!selectedCourseId || noteIds.length === 0) {
+      return;
+    }
+
+    void runBusyTask(
+      "Exam source queue update failed",
+      () => addExamSourceNotes(selectedCourseId, noteIds),
+      (nextWorkspace) => {
+        setExamWorkspace(nextWorkspace);
+        showBanner({
+          tone: "success",
+          title: "Added to exam queue",
+          detail: `${noteIds.length} note${noteIds.length === 1 ? "" : "s"} added to the exam source queue.`,
+        }, "Exams");
+      },
+    );
+  };
+
+  const removeSourceNote = (noteId: string) => {
+    if (!selectedCourseId) {
+      return;
+    }
+
+    void runBusyTask(
+      "Exam source queue update failed",
+      () => removeExamSourceNotes(selectedCourseId, [noteId]),
+      (nextWorkspace) => {
+        setExamWorkspace(nextWorkspace);
+      },
+    );
+  };
+
+  const clearSourceQueue = () => {
+    if (!selectedCourseId) {
+      return;
+    }
+
+    void runBusyTask(
+      "Exam source queue update failed",
+      () => clearExamSourceQueue(selectedCourseId),
+      (nextWorkspace) => {
+        setExamWorkspace(nextWorkspace);
+        showBanner({
+          tone: "neutral",
+          title: "Exam source queue cleared",
+        }, "Exams");
+      },
+    );
+  };
+
+  const queueExamBatch = () => {
+    if (!examDraft) {
+      showBanner({
+        tone: "error",
+        title: "Course required",
+        detail: "Choose a course before queueing exams.",
+      }, "Exams");
+      return;
+    }
+
+    void runBusyTask("Exam queue failed", () => queueExams(examDraft), (nextWorkspace) => {
+      setExamWorkspace(nextWorkspace);
+      showBanner({
+        tone: "success",
+        title: "Exams queued",
+        detail: `${examDraft.generateCount} exam${examDraft.generateCount === 1 ? "" : "s"} added to the generation queue.`,
+      }, "Exams");
+      setActiveView("exams");
+    });
+  };
+
+  const submitExam = (answers: Record<string, string>) => {
+    if (!examDetails) {
+      return;
+    }
+
+    const request: ExamSubmissionRequest = {
+      examId: examDetails.id,
+      answers: examDetails.questions.map((question) => ({
+        questionId: question.id,
+        answer: answers[question.id] ?? "",
+      })),
+    };
+
+    void runBusyTask("Exam submission failed", () => submitExamAttempt(request), (result) => {
+      setExamAttemptResult(result);
+      void refreshExamWorkspace();
+      showBanner({
+        tone: "success",
+        title: "Exam submitted",
+        detail: `Score ${result.scorePercent}% · ${result.incorrectCount} question${result.incorrectCount === 1 ? "" : "s"} still need work.`,
+      }, "Exams");
+    });
+  };
+
+  const applyReviewActions = (actions: ApplyExamReviewActionsRequest["actions"]) => {
+    if (!examAttemptResult) {
+      return;
+    }
+
+    void runBusyTask(
+      "Exam review apply failed",
+      () =>
+        applyExamReviewActions({
+          attemptId: examAttemptResult.attemptId,
+          actions,
+        }),
+      (nextWorkspace) => {
+        setExamWorkspace(nextWorkspace);
+        showBanner({
+          tone: "success",
+          title: "Learning queue updated",
+          detail: "Mastery and review recommendations were applied.",
+        }, "Exams");
+      },
+    );
+  };
+
   return (
     <div className={`shell shell--${activeView}`}>
       <AppSidebar
@@ -668,39 +1022,68 @@ function App() {
         ) : null}
         <div className={`workspace-body workspace-body--${activeView} ${showInspector ? "workspace-body--with-inspector" : "workspace-body--single"}`}>
           <main className="content-pane">
-            <MainPane
-              activeView={activeView}
-              activityLog={activityLog}
-              aiFilter={aiFilter}
-              busyAction={busyAction}
-              flashcardResult={flashcardResult}
-              noteFilter={noteFilter}
-              revisionResult={revisionResult}
-              runtimeMode={runtimeMode}
-              scanReport={scanReport}
-              selectedCourse={selectedCourse}
-              selectedNoteId={selectedNoteId}
-              selectedNoteIds={selectedNoteIds}
-              workspace={workspace}
-              onChangeAiFilter={setAiFilter}
-              onChangeNoteFilter={setNoteFilter}
-              onCreateRevisionNote={createRevisionNote}
-              onGenerateFlashcards={createFlashcards}
-              onGenerateCourseAi={() => beginCourseAiEnrichment(false)}
-              onRefreshCourseAi={() => beginCourseAiEnrichment(true)}
-              onOpenNote={focusNote}
-              onOpenAiNote={(noteId) => focusNote(noteId, "ai")}
-              onApplyAiSelection={applyAiSelection}
-              onSelectCourse={(courseId) => focusCourse(courseId, "courses")}
-              onStartNewCourse={startNewCourse}
-              onToggleNoteSelection={(noteId) =>
-                setSelectedNoteIds((current) =>
-                  current.includes(noteId)
-                    ? current.filter((entry) => entry !== noteId)
-                    : [...current, noteId],
-                )
-              }
-            />
+            {activeView === "exams" ? (
+              <ExamsWorkspace
+                busyAction={busyAction}
+                examAttemptResult={examAttemptResult}
+                examDefaults={examDefaults}
+                examDetails={examDetails}
+                examDraft={examDraft}
+                examWorkspace={examWorkspace}
+                noteDetails={noteDetails}
+                selectedCourse={selectedCourse}
+                selectedNoteIds={selectedNoteIds}
+                onAddQueuedNotes={addQueuedNotesToExamQueue}
+                onApplyReviewActions={applyReviewActions}
+                onChangeDefaultField={updateExamDefaultField}
+                onChangeDraftField={updateExamDraftField}
+                onClearSourceQueue={clearSourceQueue}
+                onOpenNote={previewExamNote}
+                onQueueExams={queueExamBatch}
+                onRemoveSourceNote={removeSourceNote}
+                onSelectExam={(examId) => {
+                  setSelectedExamId(examId);
+                  setExamAttemptResult(null);
+                }}
+                onSubmitExam={submitExam}
+                onUsePreset={applyExamPreset}
+              />
+            ) : (
+              <MainPane
+                activeView={activeView}
+                activityLog={activityLog}
+                aiFilter={aiFilter}
+                busyAction={busyAction}
+                flashcardResult={flashcardResult}
+                noteFilter={noteFilter}
+                revisionResult={revisionResult}
+                runtimeMode={runtimeMode}
+                scanReport={scanReport}
+                selectedCourse={selectedCourse}
+                selectedNoteId={selectedNoteId}
+                selectedNoteIds={selectedNoteIds}
+                workspace={workspace}
+                onChangeAiFilter={setAiFilter}
+                onChangeNoteFilter={setNoteFilter}
+                onCreateRevisionNote={createRevisionNote}
+                onGenerateFlashcards={createFlashcards}
+                onGenerateCourseAi={() => beginCourseAiEnrichment(false)}
+                onRefreshCourseAi={() => beginCourseAiEnrichment(true)}
+                onOpenNote={focusNote}
+                onOpenAiNote={(noteId) => focusNote(noteId, "ai")}
+                onApplyAiSelection={applyAiSelection}
+                onAddNotesToExamQueue={addNotesToExamQueue}
+                onSelectCourse={(courseId) => focusCourse(courseId, "courses")}
+                onStartNewCourse={startNewCourse}
+                onToggleNoteSelection={(noteId) =>
+                  setSelectedNoteIds((current) =>
+                    current.includes(noteId)
+                      ? current.filter((entry) => entry !== noteId)
+                      : [...current, noteId],
+                  )
+                }
+              />
+            )}
           </main>
           {showInspector ? (
             <InspectorPane
@@ -708,6 +1091,7 @@ function App() {
               aiDraft={aiDraft}
               busyAction={busyAction}
               courseDraft={courseDraft}
+              examDefaults={examDefaults}
               flashcardResult={flashcardResult}
               hasSavedApiKey={Boolean(workspace.aiSettings?.hasApiKey)}
               noteDetails={noteDetails}
@@ -736,6 +1120,7 @@ function App() {
               onSaveCourse={saveCourse}
               onGenerateNoteAiInsight={createNoteAiInsight}
               onUpdateAiField={updateAiField}
+              onUpdateExamDefaultField={updateExamDefaultField}
               onUpdateCourseField={updateCourseField}
               onValidateAiSettings={validateAi}
               onVaultPathChange={setVaultPath}

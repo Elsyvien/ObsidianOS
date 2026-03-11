@@ -7,6 +7,7 @@ import type {
   CourseConfigInput,
   DashboardData,
   ExamAttemptResult,
+  ExamAttemptSummary,
   ExamBuilderInput,
   ExamDefaults,
   ExamDetails,
@@ -43,6 +44,7 @@ type MockState = {
 type MockExamRecord = ExamDetails & {
   latestScorePercent: number | null;
   attempts: ExamAttemptResult[];
+  sourceNoteIds: string[];
   gradingKeys: Record<
     string,
     {
@@ -104,6 +106,11 @@ const EXAM_PRESET_DEFAULTS: Record<ExamDefaults["preset"], Omit<ExamDefaults, "p
     timeLimitMinutes: 45,
     generateCount: 1,
   },
+};
+
+const DEFAULT_EXAM_DEFAULTS: ExamDefaults = {
+  preset: "sprint",
+  ...EXAM_PRESET_DEFAULTS.sprint,
 };
 
 export async function loadWorkspaceMock() {
@@ -183,6 +190,10 @@ export async function saveCourseConfigMock(input: CourseConfigInput) {
 }
 
 export async function deleteCourseMock(courseId: string) {
+  for (const note of state.notesByCourse[courseId] ?? []) {
+    delete state.noteMastery[note.id];
+    delete state.noteAccuracy[note.id];
+  }
   state.workspace.courses = state.workspace.courses.filter((course) => course.id !== courseId);
   delete state.notesByCourse[courseId];
   delete state.flashcardRuns[courseId];
@@ -439,11 +450,20 @@ export async function queueExamsMock(request: ExamBuilderInput) {
     throw new Error("Add one or more notes to the exam source queue first.");
   }
 
-  const generateCount = Math.max(1, Math.min(5, request.generateCount || 1));
+  const presetDefaults = EXAM_PRESET_DEFAULTS[request.preset];
+  const normalizedRequest: ExamBuilderInput = {
+    ...request,
+    multipleChoiceCount: Math.max(1, request.multipleChoiceCount || presetDefaults.multipleChoiceCount),
+    shortAnswerCount: Math.max(1, request.shortAnswerCount || presetDefaults.shortAnswerCount),
+    difficulty: request.difficulty || presetDefaults.difficulty,
+    timeLimitMinutes: Math.max(5, request.timeLimitMinutes || presetDefaults.timeLimitMinutes),
+    generateCount: Math.max(1, Math.min(5, request.generateCount || presetDefaults.generateCount)),
+  };
+  const generateCount = normalizedRequest.generateCount;
   const exams = state.examsByCourse[request.courseId] ?? [];
 
   for (let index = 0; index < generateCount; index += 1) {
-    exams.unshift(createQueuedExamRecord(request.courseId, request, exams.length + index));
+    exams.unshift(createQueuedExamRecord(request.courseId, normalizedRequest, exams.length + index));
   }
 
   state.examsByCourse[request.courseId] = exams;
@@ -521,6 +541,7 @@ export async function submitExamAttemptMock(request: ExamSubmissionRequest) {
       noteId,
       title: note?.title ?? "Unknown note",
       relativePath: note?.relativePath ?? "",
+      currentState: state.noteMastery[noteId] ?? "active",
       recommendedState,
       accuracy,
       reason:
@@ -553,6 +574,7 @@ export async function submitExamAttemptMock(request: ExamSubmissionRequest) {
 
   record.attempts.unshift(attempt);
   record.latestScorePercent = attempt.scorePercent;
+  record.updatedAt = attempt.submittedAt;
   return clone(attempt);
 }
 
@@ -569,6 +591,8 @@ export async function applyExamReviewActionsMock(request: ApplyExamReviewActions
     state.noteMastery[action.noteId] = action.nextState;
     if (action.addToExamQueue) {
       sourceQueue.add(action.noteId);
+    } else {
+      sourceQueue.delete(action.noteId);
     }
   }
   state.examSourceQueue[record.courseId] = Array.from(sourceQueue);
@@ -635,6 +659,7 @@ function buildDashboard(courseId: string): DashboardData {
       notePath: revision?.notePath ?? null,
       itemCount: revision?.itemCount ?? 0,
     },
+    exams: buildExamWorkspace(courseId).summary,
     notes: noteSummaries,
   };
 }
@@ -686,6 +711,401 @@ function buildAiSummary(notes: NoteDetails[]): AiCourseSummary {
         : [],
     lastError: null,
   };
+}
+
+const activeExamGenerationCourses = new Set<string>();
+
+function ensureExamCourseState(courseId: string) {
+  if (!state.examSourceQueue[courseId]) {
+    seedExamQueue(courseId);
+  }
+  if (!state.examsByCourse[courseId]) {
+    state.examsByCourse[courseId] = [];
+  }
+}
+
+function seedExamQueue(courseId: string) {
+  const notes = state.notesByCourse[courseId] ?? [];
+  const existing = new Set(state.examSourceQueue[courseId] ?? []);
+  const preserved = notes.filter((note) => existing.has(note.id)).map((note) => note.id);
+  state.examSourceQueue[courseId] =
+    preserved.length > 0 ? preserved : notes.slice(0, Math.min(2, notes.length)).map((note) => note.id);
+  for (const note of notes) {
+    state.noteMastery[note.id] ??= "active";
+    state.noteAccuracy[note.id] ??= null;
+  }
+}
+
+function buildExamWorkspace(courseId: string): ExamWorkspaceSnapshot {
+  const notes = state.notesByCourse[courseId] ?? [];
+  const noteLookup = new Map(notes.map((note) => [note.id, note]));
+  const sourceQueue = (state.examSourceQueue[courseId] ?? [])
+    .map((noteId) => buildExamSourceNote(noteLookup.get(noteId)))
+    .filter(Boolean) as ExamSourceNote[];
+  const queuedExams = (state.examsByCourse[courseId] ?? [])
+    .filter((record) => record.status === "queued" || record.status === "generating")
+    .map((record) => summarizeExamRecord(record));
+  const readyExams = (state.examsByCourse[courseId] ?? [])
+    .filter((record) => record.status === "ready")
+    .map((record) => summarizeExamRecord(record));
+  const failedExams = (state.examsByCourse[courseId] ?? [])
+    .filter((record) => record.status === "failed")
+    .map((record) => summarizeExamRecord(record));
+  const history = (state.examsByCourse[courseId] ?? [])
+    .flatMap((record) =>
+      record.attempts.map(
+        (attempt): ExamAttemptSummary => ({
+          id: attempt.attemptId,
+          examId: record.id,
+          examTitle: record.title,
+          submittedAt: attempt.submittedAt,
+          scorePercent: attempt.scorePercent,
+          correctCount: attempt.correctCount,
+          partialCount: attempt.partialCount,
+          incorrectCount: attempt.incorrectCount,
+        }),
+      ),
+    )
+    .sort((left, right) => right.submittedAt.localeCompare(left.submittedAt));
+  const reviewNotes = notes
+    .filter((note) => state.noteMastery[note.id] === "review")
+    .map((note) => buildExamSourceNote(note))
+    .filter(Boolean) as ExamSourceNote[];
+  const masteredNotes = notes
+    .filter((note) => state.noteMastery[note.id] === "mastered")
+    .map((note) => buildExamSourceNote(note))
+    .filter(Boolean) as ExamSourceNote[];
+
+  return {
+    courseId,
+    defaults: DEFAULT_EXAM_DEFAULTS,
+    sourceQueue,
+    queuedExams,
+    readyExams,
+    failedExams,
+    history,
+    reviewNotes,
+    masteredNotes,
+    summary: {
+      sourceQueueCount: sourceQueue.length,
+      queuedCount: queuedExams.filter((exam) => exam.status === "queued").length,
+      generatingCount: queuedExams.filter((exam) => exam.status === "generating").length,
+      readyCount: readyExams.length,
+      failedCount: failedExams.length,
+      reviewCount: reviewNotes.length,
+      masteredCount: masteredNotes.length,
+      latestAttemptedAt: history[0]?.submittedAt ?? null,
+    },
+  };
+}
+
+function buildExamSourceNote(note: NoteDetails | undefined): ExamSourceNote | null {
+  if (!note) {
+    return null;
+  }
+
+  return {
+    noteId: note.id,
+    title: note.title,
+    relativePath: note.relativePath,
+    aiStatus: note.aiStatus,
+    masteryState: state.noteMastery[note.id] ?? "active",
+    lastAccuracy: state.noteAccuracy[note.id] ?? null,
+    conceptCount: note.concepts.length,
+    formulaCount: note.formulas.length,
+  };
+}
+
+function summarizeExamRecord(record: MockExamRecord): ExamSummary {
+  return {
+    id: record.id,
+    courseId: record.courseId,
+    title: record.title,
+    preset: record.preset,
+    status: record.status,
+    difficulty: record.difficulty,
+    questionCount: record.questionCount,
+    sourceNoteCount: record.sourceNoteIds.length,
+    multipleChoiceCount: record.multipleChoiceCount,
+    shortAnswerCount: record.shortAnswerCount,
+    timeLimitMinutes: record.timeLimitMinutes,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    generatedAt: record.generatedAt,
+    latestScorePercent: record.latestScorePercent,
+    latestAttemptedAt: record.attempts[0]?.submittedAt ?? null,
+    attemptCount: record.attempts.length,
+    lastError: record.lastError,
+  };
+}
+
+function createQueuedExamRecord(courseId: string, request: ExamBuilderInput, sequence: number): MockExamRecord {
+  const questionCount = request.multipleChoiceCount + request.shortAnswerCount;
+  const queuedAt = now();
+  const title = request.title?.trim() ? request.title.trim() : `${capitalize(request.preset)} Exam ${sequence + 1}`;
+  const sourceNoteIds = [...(state.examSourceQueue[courseId] ?? [])];
+  const sourceNotes = sourceNoteIds
+    .map((noteId) => buildExamSourceNote(lookupNote(noteId) ?? undefined))
+    .filter(Boolean) as ExamSourceNote[];
+
+  return {
+    id: `exam-${crypto.randomUUID()}`,
+    courseId,
+    title,
+    preset: request.preset,
+    status: "queued",
+    difficulty: request.difficulty,
+    timeLimitMinutes: request.timeLimitMinutes,
+    questionCount,
+    multipleChoiceCount: request.multipleChoiceCount,
+    shortAnswerCount: request.shortAnswerCount,
+    createdAt: queuedAt,
+    updatedAt: queuedAt,
+    generatedAt: null,
+    instructions:
+      "Answer the questions from memory first. Use the linked note context only when reviewing after submission.",
+    summary: "Exam is queued for generation.",
+    questions: [],
+    sourceNotes,
+    lastError: null,
+    latestScorePercent: null,
+    attempts: [],
+    sourceNoteIds,
+    gradingKeys: {},
+  };
+}
+
+function startExamGenerationLoop(courseId: string) {
+  if (activeExamGenerationCourses.has(courseId)) {
+    return;
+  }
+
+  activeExamGenerationCourses.add(courseId);
+  processNextExam(courseId);
+}
+
+function processNextExam(courseId: string) {
+  const exams = state.examsByCourse[courseId] ?? [];
+  const generating = exams.find((exam) => exam.status === "generating");
+  const queued = exams.find((exam) => exam.status === "queued");
+  const current = generating ?? queued;
+
+  if (!current) {
+    activeExamGenerationCourses.delete(courseId);
+    return;
+  }
+
+  if (current.status === "queued") {
+    current.status = "generating";
+    current.updatedAt = now();
+  }
+
+  window.setTimeout(() => {
+    try {
+      populateExamRecord(current);
+    } catch (error) {
+      current.status = "failed";
+      current.lastError = error instanceof Error ? error.message : "Mock exam generation failed.";
+      current.updatedAt = now();
+    }
+    processNextExam(courseId);
+  }, 700);
+}
+
+function populateExamRecord(record: MockExamRecord) {
+  const notes = record.sourceNoteIds
+    .map((noteId) => lookupNote(noteId))
+    .filter(Boolean) as NoteDetails[];
+
+  if (!notes.length) {
+    throw new Error("Exam source queue is empty.");
+  }
+
+  const questions: ExamQuestion[] = [];
+  const gradingKeys: MockExamRecord["gradingKeys"] = {};
+  const noteTitles = notes.map((note) => note.title);
+
+  for (let index = 0; index < record.multipleChoiceCount; index += 1) {
+    const note = notes[index % notes.length];
+    const concept = note.concepts[index % Math.max(note.concepts.length, 1)] ?? note.title;
+    const question = buildMultipleChoiceQuestion(record.id, note, concept, noteTitles, questions.length + 1);
+    questions.push(question.question);
+    gradingKeys[question.question.id] = question.key;
+  }
+
+  for (let index = 0; index < record.shortAnswerCount; index += 1) {
+    const note = notes[(index + record.multipleChoiceCount) % notes.length];
+    const concept = note.concepts[index % Math.max(note.concepts.length, 1)] ?? note.title;
+    const question = buildShortAnswerQuestion(record.id, note, concept, questions.length + 1);
+    questions.push(question.question);
+    gradingKeys[question.question.id] = question.key;
+  }
+
+  record.questions = questions;
+  record.gradingKeys = gradingKeys;
+  record.sourceNotes = notes.map((note) => buildExamSourceNote(note)).filter(Boolean) as ExamSourceNote[];
+  record.summary = `Built from ${notes.length} queued notes with a ${record.difficulty} difficulty mix.`;
+  record.generatedAt = now();
+  record.updatedAt = record.generatedAt;
+  record.status = "ready";
+  record.lastError = null;
+}
+
+function buildMultipleChoiceQuestion(
+  examId: string,
+  note: NoteDetails,
+  concept: string,
+  noteTitles: string[],
+  index: number,
+) {
+  const correctAnswer = `The note connects ${concept} to ${note.title}.`;
+  const distractors = [
+    `It says ${concept} is unrelated to ${note.links[0] ?? noteTitles[0] ?? "the course graph"}.`,
+    `It treats ${concept} as a pure memorization term without examples.`,
+    `It replaces ${concept} with ${noteTitles.find((title) => title !== note.title) ?? "an unrelated chapter"}.`,
+  ];
+  const options = [correctAnswer, ...distractors];
+
+  return {
+    question: {
+      id: `question-${crypto.randomUUID()}`,
+      examId,
+      index,
+      type: "multiple-choice" as const,
+      prompt: `Which statement best matches the note about ${concept}?`,
+      options,
+      sourceNoteId: note.id,
+      sourceNoteTitle: note.title,
+      expectedAnswer: correctAnswer,
+      explanation: note.excerpt || `Review ${concept} in ${note.title}.`,
+      userAnswer: null,
+      isCorrect: null,
+      feedback: null,
+    },
+    key: {
+      expectedAnswer: correctAnswer,
+      keyword: concept,
+      explanation: note.excerpt || `Review ${concept} in ${note.title}.`,
+    },
+  };
+}
+
+function buildShortAnswerQuestion(examId: string, note: NoteDetails, concept: string, index: number) {
+  const formula = note.formulas[0];
+  const expectedAnswer = formula
+    ? `${concept} matters in ${note.title}, and the key formula is ${formula}.`
+    : `${concept} is a core idea in ${note.title}. ${note.excerpt}`;
+
+  return {
+    question: {
+      id: `question-${crypto.randomUUID()}`,
+      examId,
+      index,
+      type: "short-answer" as const,
+      prompt: `Explain ${concept} in the context of ${note.title}.`,
+      options: [],
+      sourceNoteId: note.id,
+      sourceNoteTitle: note.title,
+      expectedAnswer,
+      explanation: note.excerpt || `Revisit ${note.title} and restate the main idea clearly.`,
+      userAnswer: null,
+      isCorrect: null,
+      feedback: null,
+    },
+    key: {
+      expectedAnswer,
+      keyword: concept.toLowerCase(),
+      explanation: note.excerpt || `Revisit ${note.title} and restate the main idea clearly.`,
+    },
+  };
+}
+
+function scoreExamAnswer(
+  question: ExamQuestion,
+  answer: string | string[],
+  keyword: string,
+  expectedAnswer: string,
+): ExamQuestionResult["verdict"] {
+  if (question.type === "multiple-choice") {
+    const normalized = Array.isArray(answer) ? answer.join(" ") : answer;
+    return normalized.trim() === expectedAnswer ? "correct" : "incorrect";
+  }
+
+  const normalized = (Array.isArray(answer) ? answer.join(" ") : answer).trim().toLowerCase();
+  if (!normalized) {
+    return "incorrect";
+  }
+  if (normalized.includes(keyword.toLowerCase()) && normalized.length >= Math.min(expectedAnswer.length / 2, 24)) {
+    return "correct";
+  }
+  if (normalized.includes(keyword.toLowerCase()) || normalized.split(/\s+/).length >= 4) {
+    return "partial";
+  }
+  return "incorrect";
+}
+
+function stripExamRecord(record: MockExamRecord): ExamDetails {
+  return {
+    id: record.id,
+    courseId: record.courseId,
+    title: record.title,
+    preset: record.preset,
+    status: record.status,
+    difficulty: record.difficulty,
+    timeLimitMinutes: record.timeLimitMinutes,
+    questionCount: record.questionCount,
+    multipleChoiceCount: record.multipleChoiceCount,
+    shortAnswerCount: record.shortAnswerCount,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    generatedAt: record.generatedAt,
+    instructions: record.instructions,
+    summary: record.summary,
+    questions: record.questions.map((question) => ({
+      ...question,
+      expectedAnswer: null,
+      explanation: null,
+      userAnswer: null,
+      isCorrect: null,
+      feedback: null,
+    })),
+    sourceNotes: record.sourceNotes,
+    lastError: record.lastError,
+  };
+}
+
+function findExamRecord(examId: string) {
+  for (const exams of Object.values(state.examsByCourse)) {
+    const record = exams.find((exam) => exam.id === examId);
+    if (record) {
+      return record;
+    }
+  }
+  return null;
+}
+
+function findExamRecordByAttempt(attemptId: string) {
+  for (const exams of Object.values(state.examsByCourse)) {
+    const record = exams.find((exam) => exam.attempts.some((attempt) => attempt.attemptId === attemptId));
+    if (record) {
+      return record;
+    }
+  }
+  return null;
+}
+
+function lookupNote(noteId: string) {
+  for (const notes of Object.values(state.notesByCourse)) {
+    const note = notes.find((entry) => entry.id === noteId);
+    if (note) {
+      return note;
+    }
+  }
+  return null;
+}
+
+function capitalize(value: string) {
+  return value.slice(0, 1).toUpperCase() + value.slice(1);
 }
 
 function ensureDemoWorkspace() {
@@ -742,6 +1162,8 @@ function ensureDemoWorkspace() {
 
   for (const course of state.workspace.courses) {
     state.notesByCourse[course.id] = buildBlueprint(course).notes;
+    seedExamQueue(course.id);
+    state.examsByCourse[course.id] = [];
   }
 
   state.workspace.dashboard = state.workspace.selectedCourseId

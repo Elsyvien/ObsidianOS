@@ -36,6 +36,7 @@ type MainPaneProps = {
   onOpenNote: (noteId: string) => void;
   onOpenAiNote: (noteId: string) => void;
   onApplyAiSelection: (noteIds: string[], label: string, mode?: "append" | "replace") => void;
+  onAddNotesToExamQueue: (noteIds: string[]) => void;
   onRefreshCourseAi: () => void;
   onSelectCourse: (courseId: string) => void;
   onStartNewCourse: () => void;
@@ -64,6 +65,7 @@ export function MainPane({
   onOpenNote,
   onOpenAiNote,
   onApplyAiSelection,
+  onAddNotesToExamQueue,
   onRefreshCourseAi,
   onSelectCourse,
   onStartNewCourse,
@@ -228,6 +230,14 @@ export function MainPane({
                   {filter.label}
                 </button>
               ))}
+              <button
+                className="toolbar__item"
+                disabled={selectedNoteIds.length === 0}
+                onClick={() => onAddNotesToExamQueue(selectedNoteIds)}
+                type="button"
+              >
+                Add queued to exams
+              </button>
             </div>
           </div>
           <div className="metric-strip">
@@ -420,6 +430,14 @@ export function MainPane({
                   {filter.label}
                 </button>
               ))}
+              <button
+                className="toolbar__item"
+                disabled={selectedNoteIds.length === 0}
+                onClick={() => onAddNotesToExamQueue(selectedNoteIds)}
+                type="button"
+              >
+                Add queued to exams
+              </button>
             </div>
           </div>
           <p className="surface__summary">

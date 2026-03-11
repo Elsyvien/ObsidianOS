@@ -4,6 +4,7 @@ import { formatDate, formatDateTime, shortenPath, type CourseDraft } from "../li
 import type {
   AiSettingsInput,
   CourseConfig,
+  ExamDefaults,
   FlashcardGenerationResult,
   NoteDetails,
   RevisionNoteResult,
@@ -20,6 +21,7 @@ type InspectorPaneProps = {
   aiDraft: AiSettingsInput;
   busyAction: string | null;
   courseDraft: CourseDraft;
+  examDefaults: ExamDefaults;
   flashcardResult: FlashcardGenerationResult | null;
   hasSavedApiKey: boolean;
   noteDetails: NoteDetails | null;
@@ -42,6 +44,7 @@ type InspectorPaneProps = {
   onSaveAiSettings: () => void;
   onSaveCourse: () => void;
   onUpdateAiField: <K extends keyof AiSettingsInput>(field: K, value: AiSettingsInput[K]) => void;
+  onUpdateExamDefaultField: <K extends keyof ExamDefaults>(field: K, value: ExamDefaults[K]) => void;
   onUpdateCourseField: (field: EditableCourseField, value: string) => void;
   onValidateAiSettings: () => void;
   onVaultPathChange: (value: string) => void;
@@ -52,6 +55,7 @@ export function InspectorPane({
   aiDraft,
   busyAction,
   courseDraft,
+  examDefaults,
   flashcardResult,
   hasSavedApiKey,
   noteDetails,
@@ -74,6 +78,7 @@ export function InspectorPane({
   onSaveAiSettings,
   onSaveCourse,
   onUpdateAiField,
+  onUpdateExamDefaultField,
   onUpdateCourseField,
   onValidateAiSettings,
   onVaultPathChange,
@@ -547,6 +552,73 @@ export function InspectorPane({
               OpenRouter is the default provider. The app can use a saved key here or local
               `OPENROUTER_API_KEY` / `OPENAI_API_KEY` environment variables.
               Some local OpenAI-compatible providers do not need a key at all.
+            </p>
+          </InspectorSection>
+
+          <InspectorSection eyebrow="Exam defaults" title="New exam preset">
+            <div className="form-grid">
+              <Field label="Preset">
+                <select
+                  onChange={(event) => onUpdateExamDefaultField("preset", event.target.value as ExamDefaults["preset"])}
+                  value={examDefaults.preset}
+                >
+                  <option value="sprint">Sprint</option>
+                  <option value="mock">Mock</option>
+                  <option value="final">Final</option>
+                </select>
+              </Field>
+              <Field label="Difficulty">
+                <select
+                  onChange={(event) =>
+                    onUpdateExamDefaultField("difficulty", event.target.value as ExamDefaults["difficulty"])
+                  }
+                  value={examDefaults.difficulty}
+                >
+                  <option value="easy">Easy</option>
+                  <option value="mixed">Mixed</option>
+                  <option value="hard">Hard</option>
+                </select>
+              </Field>
+              <Field label="MCQ count">
+                <input
+                  min={1}
+                  onChange={(event) =>
+                    onUpdateExamDefaultField("multipleChoiceCount", Number(event.target.value) || 1)
+                  }
+                  type="number"
+                  value={examDefaults.multipleChoiceCount}
+                />
+              </Field>
+              <Field label="Short answer count">
+                <input
+                  min={1}
+                  onChange={(event) =>
+                    onUpdateExamDefaultField("shortAnswerCount", Number(event.target.value) || 1)
+                  }
+                  type="number"
+                  value={examDefaults.shortAnswerCount}
+                />
+              </Field>
+              <Field label="Time limit (min)">
+                <input
+                  min={5}
+                  onChange={(event) => onUpdateExamDefaultField("timeLimitMinutes", Number(event.target.value) || 5)}
+                  type="number"
+                  value={examDefaults.timeLimitMinutes}
+                />
+              </Field>
+              <Field label="Batch size">
+                <input
+                  max={5}
+                  min={1}
+                  onChange={(event) => onUpdateExamDefaultField("generateCount", Number(event.target.value) || 1)}
+                  type="number"
+                  value={examDefaults.generateCount}
+                />
+              </Field>
+            </div>
+            <p className="inspector-copy">
+              These defaults seed the exam builder in the new Exams workspace. Question counts are still editable per batch.
             </p>
           </InspectorSection>
         </>
