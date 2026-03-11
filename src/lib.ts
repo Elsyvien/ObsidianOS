@@ -37,7 +37,7 @@ export const DEFAULT_AI_SETTINGS: AiSettingsInput = {
   model: "openrouter/free",
   apiKey: "",
   enabled: false,
-  timeoutMs: 30000,
+  timeoutMs: 120000,
 };
 
 export const DEFAULT_EXAM_DEFAULTS: ExamDefaults = {

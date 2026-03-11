@@ -371,7 +371,7 @@ fn ensure_required(settings: &AiProviderSettings) -> Result<()> {
 
 fn build_client(timeout_ms: u64) -> Result<Client> {
     Client::builder()
-        .timeout(Duration::from_millis(timeout_ms.max(2_000)))
+        .timeout(Duration::from_millis(timeout_ms.max(120_000)))
         .build()
         .context("failed to build HTTP client")
 }
@@ -398,12 +398,12 @@ fn send_chat_request(settings: &AiProviderSettings, payload: Value) -> Result<Va
         .header(ACCEPT, "application/json")
         .json(&payload)
         .send()
-        .context("failed to reach chat completions endpoint")?;
+        .map_err(|error| anyhow!("failed to reach chat completions endpoint: {error}"))?;
 
     let status = response.status();
     let body_bytes = response
         .bytes()
-        .context("failed to read provider response")?;
+        .map_err(|error| anyhow!("failed to read provider response: {error}"))?;
     let body = String::from_utf8_lossy(body_bytes.as_ref()).trim().to_string();
     if !status.is_success() {
         return Err(anyhow!("provider rejected request ({status}): {body}"));
