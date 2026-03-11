@@ -6,28 +6,38 @@ import {
   chooseVaultDirectory,
   clearExamSourceQueue,
   connectVault,
+  createChatThread,
   deleteCourse,
+  deleteChatThread,
   disconnectVault,
   getExamDetails,
   getExamWorkspace,
+  getFormulaDetails,
+  getFormulaWorkspace,
+  getChatThread,
   generateFlashcards,
+  generateFormulaBrief,
   generateNoteAiInsight,
   generateRevisionNote,
   getRuntimeMode,
   getDashboard,
   getNoteDetails,
+  listChatThreads,
   loadWorkspace,
   queueExams,
   removeExamSourceNotes,
   runScan,
   saveAiSettings,
   saveCourseConfig,
+  sendChatMessage,
   startAiEnrichment,
   submitExamAttempt,
   validateAiSettings,
 } from "./api";
 import { AppSidebar } from "./components/AppSidebar";
+import { ChatWorkspace } from "./components/ChatWorkspace";
 import { ExamsWorkspace } from "./components/ExamsWorkspace";
+import { FormulaWorkspace } from "./components/FormulaWorkspace";
 import { InspectorPane } from "./components/InspectorPane";
 import { MainPane } from "./components/MainPane";
 import { type AppView, type NoteFilter, getViewMeta } from "./components/appShell";
@@ -46,6 +56,9 @@ import type {
   ApplyExamReviewActionsRequest,
   ActivityLogEntry,
   AiSettingsInput,
+  ChatScope,
+  ChatThreadDetails,
+  ChatThreadSummary,
   CourseConfigInput,
   ExamAttemptResult,
   ExamBuilderInput,
@@ -54,9 +67,12 @@ import type {
   ExamWorkspaceSnapshot,
   ExamSubmissionRequest,
   FlashcardGenerationResult,
+  FormulaDetails,
+  FormulaWorkspaceSnapshot,
   NoteDetails,
   RevisionNoteResult,
   ScanReport,
+  SendChatMessageRequest,
   WorkspaceSnapshot,
 } from "./types";
 
@@ -86,6 +102,14 @@ function App() {
   const [selectedExamId, setSelectedExamId] = useState<string | null>(null);
   const [examDetails, setExamDetails] = useState<ExamDetails | null>(null);
   const [examAttemptResult, setExamAttemptResult] = useState<ExamAttemptResult | null>(null);
+  const [formulaWorkspace, setFormulaWorkspace] = useState<FormulaWorkspaceSnapshot | null>(null);
+  const [selectedFormulaId, setSelectedFormulaId] = useState<string | null>(null);
+  const [formulaDetails, setFormulaDetails] = useState<FormulaDetails | null>(null);
+  const [chatScope, setChatScope] = useState<ChatScope>("course");
+  const [courseChatThreads, setCourseChatThreads] = useState<ChatThreadSummary[]>([]);
+  const [vaultChatThreads, setVaultChatThreads] = useState<ChatThreadSummary[]>([]);
+  const [selectedChatThreadId, setSelectedChatThreadId] = useState<string | null>(null);
+  const [chatThread, setChatThread] = useState<ChatThreadDetails | null>(null);
   const [examDefaults, setExamDefaults] = useState<ExamDefaults>(() => {
     if (typeof window === "undefined") {
       return DEFAULT_EXAM_DEFAULTS;
@@ -225,6 +249,59 @@ function App() {
   }, [isPreview, selectedCourseId, workspace.vault]);
 
   useEffect(() => {
+    if ((!workspace.vault && !isPreview) || !selectedCourseId) {
+      setFormulaWorkspace(null);
+      return;
+    }
+
+    let cancelled = false;
+    void getFormulaWorkspace(selectedCourseId)
+      .then((nextWorkspace) => {
+        if (!cancelled) {
+          setFormulaWorkspace(nextWorkspace);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorBanner("Formula workspace failed to load", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPreview, selectedCourseId, workspace.vault]);
+
+  useEffect(() => {
+    if ((!workspace.vault && !isPreview) || (!selectedCourseId && chatScope === "course")) {
+      setCourseChatThreads([]);
+      setVaultChatThreads([]);
+      return;
+    }
+
+    let cancelled = false;
+    void Promise.all([
+      listChatThreads("vault"),
+      selectedCourseId ? listChatThreads("course", selectedCourseId) : Promise.resolve([]),
+    ])
+      .then(([vaultThreads, courseThreads]) => {
+        if (!cancelled) {
+          setVaultChatThreads(vaultThreads);
+          setCourseChatThreads(courseThreads);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorBanner("Chat threads failed to load", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [chatScope, isPreview, selectedCourseId, workspace.vault]);
+
+  useEffect(() => {
     const availableNoteIds = new Set(dashboard?.notes.map((note) => note.id) ?? []);
     setSelectedNoteIds((current) => current.filter((noteId) => availableNoteIds.has(noteId)));
 
@@ -263,6 +340,55 @@ function App() {
       cancelled = true;
     };
   }, [selectedExamId]);
+
+  useEffect(() => {
+    if (!selectedFormulaId || !selectedCourseId) {
+      setFormulaDetails(null);
+      return;
+    }
+
+    let cancelled = false;
+    void getFormulaDetails(selectedFormulaId, selectedCourseId)
+      .then((details) => {
+        if (!cancelled) {
+          setFormulaDetails(details);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorBanner("Formula details unavailable", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCourseId, selectedFormulaId]);
+
+  useEffect(() => {
+    if (!selectedChatThreadId) {
+      setChatThread(null);
+      return;
+    }
+
+    let cancelled = false;
+    void getChatThread(selectedChatThreadId)
+      .then((thread) => {
+        if (!cancelled) {
+          setChatThread(thread);
+          setChatScope(thread.scope);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrorBanner("Chat thread unavailable", error);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedChatThreadId]);
 
   useEffect(() => {
     if (!selectedNoteId) {
@@ -308,6 +434,24 @@ function App() {
       setExamAttemptResult(null);
     }
   }, [examWorkspace, selectedExamId]);
+
+  useEffect(() => {
+    const availableFormulaIds = new Set(formulaWorkspace?.formulas.map((formula) => formula.id) ?? []);
+    if (selectedFormulaId && !availableFormulaIds.has(selectedFormulaId)) {
+      setSelectedFormulaId(formulaWorkspace?.formulas[0]?.id ?? null);
+      setFormulaDetails(null);
+    }
+  }, [formulaWorkspace, selectedFormulaId]);
+
+  useEffect(() => {
+    const availableThreadIds = new Set(
+      [...courseChatThreads, ...vaultChatThreads].map((thread) => thread.id),
+    );
+    if (selectedChatThreadId && !availableThreadIds.has(selectedChatThreadId)) {
+      setSelectedChatThreadId(null);
+      setChatThread(null);
+    }
+  }, [courseChatThreads, selectedChatThreadId, vaultChatThreads]);
 
   useEffect(() => {
     if (!workspace.vault || !selectedCourseId || !aiIsRunning) {
@@ -428,6 +572,13 @@ function App() {
     setSelectedExamId(null);
     setExamDetails(null);
     setExamAttemptResult(null);
+    setFormulaWorkspace(null);
+    setSelectedFormulaId(null);
+    setFormulaDetails(null);
+    setCourseChatThreads([]);
+    setVaultChatThreads([]);
+    setSelectedChatThreadId(null);
+    setChatThread(null);
     const nextCourseId =
       next.selectedCourseId ??
       (selectedCourseId && next.courses.some((course) => course.id === selectedCourseId)
@@ -492,8 +643,13 @@ function App() {
       setSelectedCourseId(courseId);
       setSelectedNoteId(null);
       setSelectedNoteIds([]);
+      setSelectedFormulaId(null);
       setNoteFilter("all");
       setAiFilter("all");
+      if (chatScope === "course") {
+        setSelectedChatThreadId(null);
+        setChatThread(null);
+      }
       setActiveView(nextView);
     });
   }
@@ -681,10 +837,10 @@ function App() {
   const scan = () => {
     showBanner({
       tone: "neutral",
-      title: isPreview ? "Refreshing preview index" : `Scanning ${selectedCourse?.name ?? "course"}`,
+      title: isPreview ? "Refreshing preview index" : "Scanning vault courses",
       detail: isPreview
         ? "Refreshing the sample workspace."
-        : "Reading markdown files, updating the index, and rebuilding links. The page refreshes when the scan finishes.",
+        : "Reading markdown files across saved courses, updating the index, and rebuilding links. The page refreshes when the scan finishes.",
     }, "Overview");
 
     void runBusyTask("Scan failed", runScan, ({ workspace: next, report }) => {
@@ -844,6 +1000,27 @@ function App() {
     });
   };
 
+  const refreshFormulaWorkspace = (courseId = selectedCourseId) => {
+    if (!courseId) {
+      return Promise.resolve(null);
+    }
+
+    return getFormulaWorkspace(courseId).then((next) => {
+      setFormulaWorkspace(next);
+      return next;
+    });
+  };
+
+  const refreshChatThreads = (courseId = selectedCourseId) =>
+    Promise.all([
+      listChatThreads("vault"),
+      courseId ? listChatThreads("course", courseId) : Promise.resolve([] as ChatThreadSummary[]),
+    ]).then(([nextVaultThreads, nextCourseThreads]) => {
+      setVaultChatThreads(nextVaultThreads);
+      setCourseChatThreads(nextCourseThreads);
+      return { nextVaultThreads, nextCourseThreads };
+    });
+
   const addQueuedNotesToExamQueue = () => {
     if (!selectedCourseId || selectedNoteIds.length === 0) {
       showBanner({
@@ -987,6 +1164,112 @@ function App() {
     );
   };
 
+  const generateSelectedFormulaBrief = (formulaId: string) => {
+    if (!selectedCourseId || !formulaId) {
+      showBanner({
+        tone: "error",
+        title: "Choose a formula first",
+        detail: "Select a formula from the library before generating the AI brief.",
+      }, "Formulas");
+      return;
+    }
+
+    void runBusyTask(
+      "Formula brief generation failed",
+      () =>
+        generateFormulaBrief({
+          courseId: selectedCourseId,
+          formulaId,
+        }),
+      (brief) => {
+        setFormulaDetails((current) =>
+          current && current.id === formulaId ? { ...current, brief } : current,
+        );
+        void refreshFormulaWorkspace(selectedCourseId);
+        showBanner({
+          tone: "success",
+          title: "Formula brief ready",
+          detail: "Coach, practice, and derivation tabs were refreshed for the selected formula.",
+        }, "Formulas");
+      },
+    );
+  };
+
+  const createCurrentChatThread = () => {
+    if (chatScope === "course" && !selectedCourseId) {
+      showBanner({
+        tone: "error",
+        title: "Course required",
+        detail: "Choose a course before starting a course-scoped thread.",
+      }, "Chat");
+      return;
+    }
+
+    void runBusyTask(
+      "Chat thread creation failed",
+      () =>
+        createChatThread({
+          scope: chatScope,
+          courseId: chatScope === "course" ? selectedCourseId : null,
+        }),
+      (thread) => {
+        setSelectedChatThreadId(thread.id);
+        setChatThread(thread);
+        void refreshChatThreads(thread.courseId ?? selectedCourseId);
+      },
+    );
+  };
+
+  const sendPromptToChat = (content: string) => {
+    if (!content.trim()) {
+      return;
+    }
+
+    if (chatScope === "course" && !selectedCourseId) {
+      showBanner({
+        tone: "error",
+        title: "Course required",
+        detail: "Choose a course before sending a course-scoped question.",
+      }, "Chat");
+      return;
+    }
+
+    void runBusyTask("Chat send failed", async () => {
+      let threadId = selectedChatThreadId;
+      if (!threadId) {
+        const created = await createChatThread({
+          scope: chatScope,
+          courseId: chatScope === "course" ? selectedCourseId : null,
+        });
+        threadId = created.id;
+      }
+
+      return sendChatMessage({
+        threadId,
+        content: content.trim(),
+      } satisfies SendChatMessageRequest);
+    }, (thread) => {
+      setSelectedChatThreadId(thread.id);
+      setChatThread(thread);
+      setChatScope(thread.scope);
+      void refreshChatThreads(thread.courseId ?? selectedCourseId);
+    });
+  };
+
+  const removeChatThread = (threadId: string) => {
+    void runBusyTask("Chat delete failed", () => deleteChatThread(threadId), () => {
+      if (selectedChatThreadId === threadId) {
+        setSelectedChatThreadId(null);
+        setChatThread(null);
+      }
+      void refreshChatThreads();
+      showBanner({
+        tone: "neutral",
+        title: "Chat thread removed",
+      }, "Chat");
+    });
+  };
+
   return (
     <div className={`shell shell--${activeView}`}>
       <AppSidebar
@@ -1005,6 +1288,7 @@ function App() {
           activeView={activeView}
           aiStatus={dashboard?.ai ?? null}
           busyAction={busyAction}
+          chatScope={chatScope}
           dashboard={dashboard}
           runtimeMode={runtimeMode}
           scanStatus={workspace.scanStatus}
@@ -1047,6 +1331,44 @@ function App() {
                 }}
                 onSubmitExam={submitExam}
                 onUsePreset={applyExamPreset}
+              />
+            ) : activeView === "formulas" ? (
+              <FormulaWorkspace
+                aiEnabled={Boolean(workspace.aiSettings?.enabled)}
+                busyAction={busyAction}
+                formulaDetails={formulaDetails}
+                formulaWorkspace={formulaWorkspace}
+                selectedCourse={selectedCourse}
+                selectedFormulaId={selectedFormulaId}
+                onGenerateBrief={generateSelectedFormulaBrief}
+                onOpenNote={(noteId) => focusNote(noteId, "notes")}
+                onSelectFormula={setSelectedFormulaId}
+              />
+            ) : activeView === "chat" ? (
+              <ChatWorkspace
+                aiEnabled={Boolean(workspace.aiSettings?.enabled)}
+                busyAction={busyAction}
+                chatScope={chatScope}
+                courseThreads={courseChatThreads}
+                selectedCourse={selectedCourse}
+                selectedThreadId={selectedChatThreadId}
+                threadDetails={chatThread}
+                vaultThreads={vaultChatThreads}
+                onChangeScope={(scope) => {
+                  setChatScope(scope);
+                  if (chatThread && chatThread.scope !== scope) {
+                    setSelectedChatThreadId(null);
+                    setChatThread(null);
+                  }
+                }}
+                onCreateThread={createCurrentChatThread}
+                onDeleteThread={removeChatThread}
+                onOpenNote={(noteId) => focusNote(noteId, "notes")}
+                onSelectThread={(threadId, scope) => {
+                  setChatScope(scope);
+                  setSelectedChatThreadId(threadId);
+                }}
+                onSendMessage={sendPromptToChat}
               />
             ) : (
               <MainPane

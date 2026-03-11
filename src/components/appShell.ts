@@ -1,4 +1,14 @@
-export type AppView = "overview" | "ai" | "exams" | "logs" | "courses" | "notes" | "outputs" | "settings";
+export type AppView =
+  | "overview"
+  | "notes"
+  | "formulas"
+  | "ai"
+  | "exams"
+  | "chat"
+  | "logs"
+  | "courses"
+  | "outputs"
+  | "settings";
 
 export type NoteFilter = "all" | "weak" | "selected";
 
@@ -13,6 +23,16 @@ export const APP_VIEWS: Array<{
     description: "Track the active course, countdown, graph health, and the next revision moves.",
   },
   {
+    id: "notes",
+    label: "Notes",
+    description: "Review indexed notes, queue them for flashcards, and inspect extracted structure.",
+  },
+  {
+    id: "formulas",
+    label: "Formulas",
+    description: "Browse the current course formula library, open note context, and generate an AI brief per formula.",
+  },
+  {
     id: "ai",
     label: "AI",
     description: "Run AI enrichment, review the course brief, and track which notes still need support.",
@@ -23,24 +43,24 @@ export const APP_VIEWS: Array<{
     description: "Queue generated exams, take them in app, and turn results into a real review queue.",
   },
   {
+    id: "chat",
+    label: "Chat",
+    description: "Ask grounded questions against the current course or the whole vault, with note citations.",
+  },
+  {
     id: "logs",
     label: "Logs",
     description: "Review the live activity stream for scans, AI runs, exports, and runtime actions.",
   },
   {
-    id: "courses",
-    label: "Courses",
-    description: "Define course folders, exam dates, and output targets for the vault.",
-  },
-  {
-    id: "notes",
-    label: "Notes",
-    description: "Review indexed notes, queue them for flashcards, and inspect extracted structure.",
-  },
-  {
     id: "outputs",
     label: "Outputs",
     description: "Generate flashcards and revision notes, then keep the latest exports within reach.",
+  },
+  {
+    id: "courses",
+    label: "Courses",
+    description: "Define course folders, exam dates, and output targets for the vault.",
   },
   {
     id: "settings",

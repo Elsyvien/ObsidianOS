@@ -11,18 +11,21 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
-use crate::ai::{self, AiProviderSettings, FlashcardCard};
+use crate::ai::{self, AiProviderSettings, ChatContextChunkInput, FlashcardCard};
 use crate::markdown::{normalize_key, note_title_candidates, parse_markdown};
 use crate::models::{
     AiCourseSummary, AiNoteInsight, AiSettings, AiSettingsInput, ApplyExamReviewActionsRequest,
-    ConceptMetric, Countdown, CourseConfig, CourseConfigInput, CoverageStats, DashboardData,
-    ExamAnswerValue, ExamAttemptResult, ExamAttemptSummary, ExamBuilderInput,
-    ExamDefaults, ExamDetails, ExamDifficulty, ExamPreset, ExamQuestion, ExamQuestionResult,
-    ExamQuestionType, ExamReviewSuggestion, ExamSourceNote, ExamStatus, ExamSubmissionRequest,
-    ExamSummary, ExamVerdict, ExamWorkspaceSnapshot, ExamWorkspaceSummary,
-    FlashcardGenerationRequest, FlashcardGenerationResult, FlashcardSummary, FormulaMetric,
-    GraphStats, NoteDetails, NoteMasteryState, NoteSummary, RevisionNoteRequest,
-    RevisionNoteResult, RevisionSummary, ScanReport, ScanStatus, ValidationResult, VaultConfig,
+    ChatCitation, ChatMessage, ChatMessageRole, ChatScope, ChatThreadDetails, ChatThreadSummary,
+    ConceptMetric, Countdown, CourseConfig, CourseConfigInput, CoverageStats,
+    CreateChatThreadRequest, DashboardData, ExamAnswerValue, ExamAttemptResult, ExamAttemptSummary,
+    ExamBuilderInput, ExamDefaults, ExamDetails, ExamDifficulty, ExamPreset, ExamQuestion,
+    ExamQuestionResult, ExamQuestionType, ExamReviewSuggestion, ExamSourceNote, ExamStatus,
+    ExamSubmissionRequest, ExamSummary, ExamVerdict, ExamWorkspaceSnapshot, ExamWorkspaceSummary,
+    FlashcardGenerationRequest, FlashcardGenerationResult, FlashcardSummary, FormulaBrief,
+    FormulaDetails, FormulaLinkedNote, FormulaMetric, FormulaSummary, FormulaWorkspaceSnapshot,
+    FormulaWorkspaceSummary, GenerateFormulaBriefRequest, GraphStats, NoteChunkPreview,
+    NoteDetails, NoteMasteryState, NoteSummary, RevisionNoteRequest, RevisionNoteResult,
+    RevisionSummary, ScanReport, ScanStatus, SendChatMessageRequest, ValidationResult, VaultConfig,
     WeakNote, WorkspaceSnapshot,
 };
 
@@ -55,6 +58,8 @@ struct StoredNote {
     title: String,
     relative_path: String,
     content_hash: String,
+    excerpt: String,
+    headings: Vec<String>,
     links: Vec<String>,
     prerequisites: Vec<String>,
     frontmatter_exam_date: Option<String>,
@@ -80,6 +85,14 @@ struct ParsedStorageNote {
     formulas: Vec<String>,
     frontmatter_raw: Option<String>,
     frontmatter_exam_date: Option<String>,
+    chunks: Vec<ParsedNoteChunk>,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedNoteChunk {
+    heading_path: String,
+    text: String,
+    ordinal: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -185,6 +198,39 @@ struct StoredNoteMastery {
     note_id: String,
     mastery_state: NoteMasteryState,
     last_accuracy: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+struct StoredNoteChunk {
+    chunk_id: String,
+    note_id: String,
+    course_id: String,
+    note_title: String,
+    relative_path: String,
+    heading_path: String,
+    text: String,
+    ordinal: usize,
+}
+
+#[derive(Debug, Clone)]
+struct StoredFormulaAggregate {
+    id: String,
+    latex: String,
+    normalized_latex: String,
+    note_count: usize,
+    source_note_ids: Vec<String>,
+    source_note_titles: Vec<String>,
+    source_hash: String,
+}
+
+#[derive(Debug, Clone)]
+struct StoredChatThread {
+    id: String,
+    scope: ChatScope,
+    course_id: Option<String>,
+    title: String,
+    created_at: String,
+    updated_at: String,
 }
 
 impl Database {
@@ -357,6 +403,71 @@ impl Database {
               last_error TEXT,
               FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS note_chunks (
+              chunk_id TEXT PRIMARY KEY,
+              note_id TEXT NOT NULL,
+              course_id TEXT NOT NULL,
+              heading_path TEXT NOT NULL,
+              text TEXT NOT NULL,
+              ordinal INTEGER NOT NULL,
+              content_hash TEXT NOT NULL,
+              FOREIGN KEY (note_id) REFERENCES note_records(id) ON DELETE CASCADE,
+              FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE
+            );
+            CREATE VIRTUAL TABLE IF NOT EXISTS note_chunks_fts USING fts5(
+              chunk_id UNINDEXED,
+              note_id UNINDEXED,
+              course_id UNINDEXED,
+              heading_path,
+              text
+            );
+            CREATE TABLE IF NOT EXISTS formula_briefs (
+              formula_id TEXT NOT NULL,
+              course_id TEXT NOT NULL,
+              source_hash TEXT NOT NULL,
+              coach_json TEXT NOT NULL,
+              practice_json TEXT NOT NULL,
+              derivation_json TEXT NOT NULL,
+              generated_at TEXT NOT NULL,
+              model TEXT NOT NULL,
+              PRIMARY KEY (formula_id, source_hash),
+              FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS chat_threads (
+              id TEXT PRIMARY KEY,
+              scope TEXT NOT NULL,
+              course_id TEXT,
+              title TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              FOREIGN KEY (course_id) REFERENCES course_configs(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS chat_messages (
+              id TEXT PRIMARY KEY,
+              thread_id TEXT NOT NULL,
+              role TEXT NOT NULL,
+              content TEXT NOT NULL,
+              used_fallback INTEGER,
+              fallback_reason TEXT,
+              created_at TEXT NOT NULL,
+              FOREIGN KEY (thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS chat_citations (
+              id TEXT PRIMARY KEY,
+              message_id TEXT NOT NULL,
+              note_id TEXT NOT NULL,
+              chunk_id TEXT,
+              note_title TEXT NOT NULL,
+              relative_path TEXT NOT NULL,
+              heading_path TEXT,
+              excerpt TEXT NOT NULL,
+              course_id TEXT NOT NULL,
+              course_name TEXT NOT NULL,
+              relevance REAL NOT NULL DEFAULT 0,
+              position INTEGER NOT NULL,
+              FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE,
+              FOREIGN KEY (note_id) REFERENCES note_records(id) ON DELETE CASCADE
+            );
             CREATE TABLE IF NOT EXISTS exam_source_queue (
               course_id TEXT NOT NULL,
               note_id TEXT NOT NULL,
@@ -450,6 +561,12 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_edges_course ON dependency_edges(course_id);
             CREATE INDEX IF NOT EXISTS idx_weak_course ON weak_link_suggestions(course_id);
             CREATE INDEX IF NOT EXISTS idx_ai_note_states_course ON ai_note_states(course_id);
+            CREATE INDEX IF NOT EXISTS idx_note_chunks_note ON note_chunks(note_id, ordinal);
+            CREATE INDEX IF NOT EXISTS idx_note_chunks_course ON note_chunks(course_id, note_id, ordinal);
+            CREATE INDEX IF NOT EXISTS idx_formula_briefs_course ON formula_briefs(course_id, formula_id, generated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_chat_threads_scope ON chat_threads(scope, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, created_at ASC);
+            CREATE INDEX IF NOT EXISTS idx_chat_citations_message ON chat_citations(message_id, position ASC);
             CREATE INDEX IF NOT EXISTS idx_exam_source_queue_course ON exam_source_queue(course_id, queued_at DESC);
             CREATE INDEX IF NOT EXISTS idx_note_mastery_course ON note_mastery_states(course_id, mastery_state);
             CREATE INDEX IF NOT EXISTS idx_exams_course_status ON exams(course_id, status, created_at DESC);
@@ -459,6 +576,24 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_exam_attempt_results_attempt ON exam_attempt_question_results(attempt_id, position);
             "#,
         )?;
+        self.ensure_column_exists("chat_citations", "course_id", "TEXT NOT NULL DEFAULT ''")?;
+        self.ensure_column_exists("chat_citations", "course_name", "TEXT NOT NULL DEFAULT ''")?;
+        self.ensure_column_exists("chat_citations", "relevance", "REAL NOT NULL DEFAULT 0")?;
+        Ok(())
+    }
+
+    fn ensure_column_exists(&self, table: &str, column: &str, definition: &str) -> Result<()> {
+        let pragma = format!("PRAGMA table_info({table})");
+        let mut statement = self.conn.prepare(&pragma)?;
+        let columns = statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if columns.iter().any(|existing| existing == column) {
+            return Ok(());
+        }
+
+        let alter = format!("ALTER TABLE {table} ADD COLUMN {column} {definition}");
+        self.conn.execute(&alter, [])?;
         Ok(())
     }
 
@@ -501,6 +636,7 @@ impl Database {
         self.conn.execute("DELETE FROM course_configs", [])?;
         self.conn.execute("DELETE FROM flashcard_sets", [])?;
         self.conn.execute("DELETE FROM revision_note_runs", [])?;
+        self.conn.execute("DELETE FROM chat_threads", [])?;
         self.reset_app_state()?;
 
         self.conn.execute(
@@ -517,6 +653,7 @@ impl Database {
         self.conn.execute("DELETE FROM course_configs", [])?;
         self.conn.execute("DELETE FROM flashcard_sets", [])?;
         self.conn.execute("DELETE FROM revision_note_runs", [])?;
+        self.conn.execute("DELETE FROM chat_threads", [])?;
         self.reset_app_state()?;
         Ok(())
     }
@@ -1204,7 +1341,12 @@ impl Database {
 
         let selected = course_id
             .or_else(|| self.get_selected_course_id().ok().flatten())
-            .and_then(|id| courses.iter().find(|course| course.id == id).map(|course| course.id.clone()))
+            .and_then(|id| {
+                courses
+                    .iter()
+                    .find(|course| course.id == id)
+                    .map(|course| course.id.clone())
+            })
             .unwrap_or_else(|| courses[0].id.clone());
 
         self.set_selected_course(Some(&selected))?;
@@ -1389,7 +1531,8 @@ impl Database {
             .find_exam_record(exam_id)?
             .ok_or_else(|| anyhow!("exam not found"))?;
         let questions = self.load_exam_questions(exam_id, true)?;
-        let source_notes = self.load_exam_source_notes_snapshot(&exam.course_id, &exam.source_note_ids)?;
+        let source_notes =
+            self.load_exam_source_notes_snapshot(&exam.course_id, &exam.source_note_ids)?;
 
         Ok(build_exam_details(exam, questions, source_notes))
     }
@@ -1493,8 +1636,9 @@ impl Database {
         }
 
         let total_questions = question_results.len().max(1);
-        let score_percent =
-            round_percentage(((correct_count as f64 + partial_count as f64 * 0.5) / total_questions as f64) * 100.0);
+        let score_percent = round_percentage(
+            ((correct_count as f64 + partial_count as f64 * 0.5) / total_questions as f64) * 100.0,
+        );
         let submitted_at = now_string();
         let attempt_id = Uuid::new_v4().to_string();
 
@@ -1550,13 +1694,11 @@ impl Database {
         }
 
         let note_suggestions = self.build_note_suggestions(&exam.course_id, &note_scores)?;
-        let overall_feedback = self
-            .conn
-            .query_row(
-                "SELECT overall_feedback FROM exam_attempts WHERE id = ?1",
-                params![&attempt_id],
-                |row| row.get::<_, String>(0),
-            )?;
+        let overall_feedback = self.conn.query_row(
+            "SELECT overall_feedback FROM exam_attempts WHERE id = ?1",
+            params![&attempt_id],
+            |row| row.get::<_, String>(0),
+        )?;
 
         Ok(ExamAttemptResult {
             exam_id: exam.id,
@@ -1586,7 +1728,9 @@ impl Database {
                 bail!("note does not belong to the exam course");
             }
 
-            let accuracy = self.note_mastery_for_note(&action.note_id)?.and_then(|row| row.last_accuracy);
+            let accuracy = self
+                .note_mastery_for_note(&action.note_id)?
+                .and_then(|row| row.last_accuracy);
             self.upsert_note_mastery(
                 &action.note_id,
                 &attempt.course_id,
@@ -1614,6 +1758,374 @@ impl Database {
 
         self.build_exam_workspace(&attempt.course_id)
     }
+
+    pub fn get_formula_workspace(
+        &self,
+        course_id: Option<String>,
+    ) -> Result<Option<FormulaWorkspaceSnapshot>> {
+        let selected = self.resolve_course_id(course_id)?;
+        let Some(course_id) = selected else {
+            return Ok(None);
+        };
+        self.set_selected_course(Some(&course_id))?;
+        let course = self
+            .find_course(&course_id)?
+            .ok_or_else(|| anyhow!("course not found"))?;
+
+        let aggregates = self.list_formula_aggregates(&course_id)?;
+        let notes_with_formulas = aggregates
+            .iter()
+            .flat_map(|formula| formula.source_note_ids.iter().cloned())
+            .collect::<HashSet<_>>()
+            .len();
+        let formula_mentions: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM formula_records WHERE course_id = ?1",
+            params![&course_id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+        let briefed_count = aggregates
+            .iter()
+            .filter(|formula| {
+                self.get_cached_formula_brief(&formula.id, &course_id, &formula.source_hash)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            })
+            .count();
+
+        Ok(Some(FormulaWorkspaceSnapshot {
+            course_id,
+            course_name: course.name,
+            generated_at: now_string(),
+            formulas: aggregates
+                .iter()
+                .map(|formula| FormulaSummary {
+                    id: formula.id.clone(),
+                    latex: formula.latex.clone(),
+                    normalized_latex: formula.normalized_latex.clone(),
+                    note_count: formula.note_count,
+                    source_note_ids: formula.source_note_ids.clone(),
+                    source_note_titles: formula.source_note_titles.clone(),
+                })
+                .collect(),
+            summary: FormulaWorkspaceSummary {
+                formula_count: aggregates.len(),
+                notes_with_formulas,
+                formula_mentions,
+                briefed_count,
+            },
+        }))
+    }
+
+    pub fn get_formula_details(&self, formula_id: &str, course_id: &str) -> Result<FormulaDetails> {
+        let aggregate = self
+            .list_formula_aggregates(course_id)?
+            .into_iter()
+            .find(|formula| formula.id == formula_id)
+            .ok_or_else(|| anyhow!("formula not found"))?;
+        self.build_formula_details(course_id, aggregate)
+    }
+
+    pub fn generate_formula_brief(
+        &self,
+        request: GenerateFormulaBriefRequest,
+    ) -> Result<FormulaBrief> {
+        let settings = self
+            .ai_settings_for_runtime()?
+            .ok_or_else(|| anyhow!("enable AI in Setup before generating formula briefs"))?;
+        let course = self
+            .find_course(&request.course_id)?
+            .ok_or_else(|| anyhow!("course not found"))?;
+        let aggregate = self
+            .list_formula_aggregates(&request.course_id)?
+            .into_iter()
+            .find(|formula| formula.id == request.formula_id)
+            .ok_or_else(|| anyhow!("formula not found"))?;
+        if !request.force.unwrap_or(false) {
+            if let Some(cached) = self.get_cached_formula_brief(
+                &request.formula_id,
+                &request.course_id,
+                &aggregate.source_hash,
+            )? {
+                return Ok(cached);
+            }
+        }
+        let details = self.build_formula_details(&request.course_id, aggregate.clone())?;
+        let chunks = details
+            .chunks
+            .iter()
+            .map(|chunk| ChatContextChunkInput {
+                citation_id: chunk.chunk_id.clone(),
+                note_id: chunk.note_id.clone(),
+                note_title: chunk.note_title.clone(),
+                relative_path: chunk.relative_path.clone(),
+                heading_path: chunk.heading_path.clone(),
+                text: chunk.text.clone(),
+            })
+            .collect::<Vec<_>>();
+        let brief = ai::generate_formula_brief(
+            &settings,
+            &course.name,
+            &details.latex,
+            &details.related_concepts,
+            &details.headings,
+            &chunks,
+        )?;
+        let stored_brief = FormulaBrief {
+            formula_id: request.formula_id.clone(),
+            coach: brief.coach,
+            practice: brief.practice,
+            derivation: brief.derivation,
+            generated_at: now_string(),
+            model: settings.model.clone(),
+            source_signature: aggregate.source_hash.clone(),
+        };
+        self.upsert_formula_brief(
+            &request.formula_id,
+            &request.course_id,
+            &aggregate.source_hash,
+            &stored_brief,
+        )?;
+        Ok(stored_brief)
+    }
+
+    pub fn list_chat_threads(
+        &self,
+        scope: ChatScope,
+        course_id: Option<String>,
+    ) -> Result<Vec<ChatThreadSummary>> {
+        let mut statement = match scope {
+            ChatScope::Course => self.conn.prepare(
+                r#"
+                SELECT id, scope, course_id, title, created_at, updated_at
+                FROM chat_threads
+                WHERE scope = 'course' AND course_id = ?1
+                ORDER BY updated_at DESC
+                "#,
+            )?,
+            ChatScope::Vault => self.conn.prepare(
+                r#"
+                SELECT id, scope, course_id, title, created_at, updated_at
+                FROM chat_threads
+                WHERE scope = 'vault'
+                ORDER BY updated_at DESC
+                "#,
+            )?,
+        };
+
+        let rows = match scope {
+            ChatScope::Course => {
+                let resolved_course_id = self
+                    .resolve_course_id(course_id)?
+                    .ok_or_else(|| anyhow!("select a course before opening course chat"))?;
+                statement
+                    .query_map(params![resolved_course_id], |row| {
+                        self.read_chat_thread_row(row)
+                    })?
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            }
+            ChatScope::Vault => statement
+                .query_map([], |row| self.read_chat_thread_row(row))?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        };
+
+        rows.into_iter()
+            .map(|thread| self.build_chat_thread_summary(thread))
+            .collect()
+    }
+
+    pub fn create_chat_thread(
+        &self,
+        request: CreateChatThreadRequest,
+    ) -> Result<ChatThreadDetails> {
+        let course_id = match request.scope {
+            ChatScope::Course => Some(
+                self.resolve_course_id(request.course_id)?
+                    .ok_or_else(|| anyhow!("select a course before creating a course chat"))?,
+            ),
+            ChatScope::Vault => None,
+        };
+        let now = now_string();
+        let id = Uuid::new_v4().to_string();
+        self.conn.execute(
+            r#"
+            INSERT INTO chat_threads (id, scope, course_id, title, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+            "#,
+            params![
+                &id,
+                chat_scope_to_str(request.scope),
+                course_id,
+                request
+                    .title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("New conversation"),
+                now,
+            ],
+        )?;
+        self.get_chat_thread(&id)
+    }
+
+    pub fn get_chat_thread(&self, thread_id: &str) -> Result<ChatThreadDetails> {
+        let thread = self
+            .find_chat_thread(thread_id)?
+            .ok_or_else(|| anyhow!("chat thread not found"))?;
+        let messages = self.load_chat_messages(thread_id)?;
+        let course_name = thread
+            .course_id
+            .as_deref()
+            .and_then(|course_id| self.find_course(course_id).ok().flatten())
+            .map(|course| course.name);
+        Ok(ChatThreadDetails {
+            id: thread.id,
+            scope: thread.scope,
+            course_id: thread.course_id,
+            course_name,
+            title: thread.title,
+            created_at: thread.created_at,
+            updated_at: thread.updated_at,
+            messages,
+        })
+    }
+
+    pub fn send_chat_message(&self, request: SendChatMessageRequest) -> Result<ChatThreadDetails> {
+        let settings = self
+            .ai_settings_for_runtime()?
+            .ok_or_else(|| anyhow!("enable AI in Setup before sending chat messages"))?;
+        let thread = self
+            .find_chat_thread(&request.thread_id)?
+            .ok_or_else(|| anyhow!("chat thread not found"))?;
+        let trimmed_message = request.content.trim();
+        if trimmed_message.is_empty() {
+            bail!("message cannot be empty");
+        }
+
+        let user_message_id = Uuid::new_v4().to_string();
+        let now = now_string();
+        self.conn.execute(
+            r#"
+            INSERT INTO chat_messages (id, thread_id, role, content, used_fallback, fallback_reason, created_at)
+            VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5)
+            "#,
+            params![
+                &user_message_id,
+                &thread.id,
+                chat_message_role_to_str(ChatMessageRole::User),
+                trimmed_message,
+                &now
+            ],
+        )?;
+
+        let recent_messages = self.load_chat_messages(&thread.id)?;
+        let retrieved_chunks =
+            self.search_chat_chunks(thread.scope, thread.course_id.as_deref(), trimmed_message)?;
+        let allow_fallback = retrieved_chunks.len() < 2;
+        let transcript = recent_messages
+            .iter()
+            .map(|message| (message.role, message.content.clone()))
+            .collect::<Vec<_>>();
+        let course_name = if let Some(course_id) = thread.course_id.as_deref() {
+            self.find_course(course_id)?.map(|course| course.name)
+        } else {
+            None
+        };
+        let answer = ai::answer_chat_query(
+            &settings,
+            thread.scope,
+            course_name.as_deref(),
+            &transcript,
+            trimmed_message,
+            &retrieved_chunks
+                .iter()
+                .enumerate()
+                .map(|(index, chunk)| ChatContextChunkInput {
+                    citation_id: format!("C{}", index + 1),
+                    note_id: chunk.note_id.clone(),
+                    note_title: chunk.note_title.clone(),
+                    relative_path: chunk.relative_path.clone(),
+                    heading_path: chunk.heading_path.clone(),
+                    text: chunk.text.clone(),
+                })
+                .collect::<Vec<_>>(),
+            allow_fallback,
+        )?;
+
+        let assistant_message_id = Uuid::new_v4().to_string();
+        let assistant_timestamp = now_string();
+        self.conn.execute(
+            r#"
+            INSERT INTO chat_messages (id, thread_id, role, content, used_fallback, fallback_reason, created_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+            params![
+                &assistant_message_id,
+                &thread.id,
+                chat_message_role_to_str(ChatMessageRole::Assistant),
+                &answer.answer,
+                bool_to_int(answer.used_fallback),
+                answer.fallback_reason.as_deref(),
+                &assistant_timestamp,
+            ],
+        )?;
+
+        let chunk_by_citation = retrieved_chunks
+            .iter()
+            .enumerate()
+            .map(|(index, chunk)| (format!("C{}", index + 1), chunk.clone()))
+            .collect::<HashMap<_, _>>();
+        for (position, citation_id) in answer.citation_ids.iter().enumerate() {
+            if let Some(chunk) = chunk_by_citation.get(citation_id) {
+                let course_name = self
+                    .find_course(&chunk.course_id)?
+                    .map(|course| course.name)
+                    .unwrap_or_else(|| "Unknown course".to_string());
+                let relevance = (1.0 - position as f64 * 0.08).max(0.2);
+                self.conn.execute(
+                    r#"
+                    INSERT INTO chat_citations (
+                      id, message_id, note_id, chunk_id, note_title, relative_path,
+                      heading_path, excerpt, course_id, course_name, relevance, position
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                    "#,
+                    params![
+                        Uuid::new_v4().to_string(),
+                        &assistant_message_id,
+                        &chunk.note_id,
+                        &chunk.chunk_id,
+                        &chunk.note_title,
+                        &chunk.relative_path,
+                        &chunk.heading_path,
+                        truncate_excerpt(&chunk.text, 220),
+                        &chunk.course_id,
+                        course_name,
+                        relevance,
+                        (position + 1) as i64,
+                    ],
+                )?;
+            }
+        }
+
+        let next_title = if thread.title == "New conversation" {
+            summarize_thread_title(trimmed_message)
+        } else {
+            thread.title.clone()
+        };
+        self.conn.execute(
+            "UPDATE chat_threads SET title = ?2, updated_at = ?3 WHERE id = ?1",
+            params![&thread.id, next_title, assistant_timestamp],
+        )?;
+
+        self.get_chat_thread(&thread.id)
+    }
+
+    pub fn delete_chat_thread(&self, thread_id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM chat_threads WHERE id = ?1", params![thread_id])?;
+        Ok(())
+    }
 }
 
 impl Database {
@@ -1625,18 +2137,6 @@ impl Database {
         if courses.is_empty() {
             bail!("create at least one course before scanning");
         }
-
-        let selected_course_id = self
-            .get_selected_course_id()?
-            .or_else(|| courses.first().map(|course| course.id.clone()));
-        let courses = if let Some(selected_course_id) = selected_course_id {
-            courses
-                .into_iter()
-                .filter(|course| course.id == selected_course_id)
-                .collect::<Vec<_>>()
-        } else {
-            courses
-        };
 
         if courses.is_empty() {
             bail!("select a course before scanning");
@@ -2412,6 +2912,7 @@ impl Database {
         content: &str,
     ) -> Result<ParsedStorageNote> {
         let parsed = parse_markdown(file_stem, content);
+        let chunks = build_note_chunks(content, &parsed.headings);
         let concepts = parsed
             .concepts
             .iter()
@@ -2434,6 +2935,7 @@ impl Database {
             formulas: parsed.formulas,
             frontmatter_raw: parsed.frontmatter.raw,
             frontmatter_exam_date: parsed.frontmatter.exam_date,
+            chunks,
         })
     }
 
@@ -2496,6 +2998,14 @@ impl Database {
             "DELETE FROM formula_records WHERE note_id = ?1",
             params![note_id],
         )?;
+        self.conn.execute(
+            "DELETE FROM note_chunks WHERE note_id = ?1",
+            params![note_id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM note_chunks_fts WHERE note_id = ?1",
+            params![note_id],
+        )?;
 
         let mut seen_concepts = HashSet::new();
         for concept in parsed.concepts {
@@ -2540,10 +3050,44 @@ impl Database {
             )?;
         }
 
+        for chunk in parsed.chunks {
+            let chunk_id = build_note_chunk_id(note_id, chunk.ordinal);
+            self.conn.execute(
+                r#"
+                INSERT INTO note_chunks (chunk_id, note_id, course_id, heading_path, text, ordinal, content_hash)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "#,
+                params![
+                    &chunk_id,
+                    note_id,
+                    course_id,
+                    chunk.heading_path,
+                    chunk.text,
+                    chunk.ordinal as i64,
+                    content_hash,
+                ],
+            )?;
+            self.conn.execute(
+                r#"
+                INSERT INTO note_chunks_fts (chunk_id, note_id, course_id, heading_path, text)
+                VALUES (?1, ?2, ?3, ?4, ?5)
+                "#,
+                params![chunk_id, note_id, course_id, chunk.heading_path, chunk.text],
+            )?;
+        }
+
         Ok(())
     }
 
     fn delete_note(&self, note_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM note_chunks_fts WHERE note_id = ?1",
+            params![note_id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM note_chunks WHERE note_id = ?1",
+            params![note_id],
+        )?;
         self.conn
             .execute("DELETE FROM note_records WHERE id = ?1", params![note_id])?;
         Ok(())
@@ -2708,7 +3252,7 @@ impl Database {
     fn list_notes(&self, course_id: &str) -> Result<Vec<StoredNote>> {
         let mut statement = self.conn.prepare(
             r#"
-            SELECT id, title, relative_path, content_hash, links_json, prerequisites_json, frontmatter_exam_date
+            SELECT id, title, relative_path, content_hash, excerpt, headings_json, links_json, prerequisites_json, frontmatter_exam_date
             FROM note_records
             WHERE course_id = ?1
             ORDER BY title ASC
@@ -2721,9 +3265,11 @@ impl Database {
                     title: row.get(1)?,
                     relative_path: row.get(2)?,
                     content_hash: row.get(3)?,
-                    links: from_json_vec::<String>(&row.get::<_, String>(4)?),
-                    prerequisites: from_json_vec::<String>(&row.get::<_, String>(5)?),
-                    frontmatter_exam_date: row.get(6)?,
+                    excerpt: row.get(4)?,
+                    headings: from_json_vec::<String>(&row.get::<_, String>(5)?),
+                    links: from_json_vec::<String>(&row.get::<_, String>(6)?),
+                    prerequisites: from_json_vec::<String>(&row.get::<_, String>(7)?),
+                    frontmatter_exam_date: row.get(8)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -2831,6 +3377,590 @@ impl Database {
         Ok(rows)
     }
 
+    fn resolve_course_id(&self, course_id: Option<String>) -> Result<Option<String>> {
+        if course_id.is_some() {
+            return Ok(course_id);
+        }
+
+        if let Some(selected) = self.get_selected_course_id()? {
+            return Ok(Some(selected));
+        }
+
+        Ok(self.list_courses()?.first().map(|course| course.id.clone()))
+    }
+
+    fn list_formula_aggregates(&self, course_id: &str) -> Result<Vec<StoredFormulaAggregate>> {
+        let note_lookup = self
+            .list_notes(course_id)?
+            .into_iter()
+            .map(|note| (note.id.clone(), note))
+            .collect::<HashMap<_, _>>();
+        let mut grouped = BTreeMap::<String, (String, Vec<String>, Vec<String>)>::new();
+
+        for (note_id, latex, normalized_latex) in self.list_formulas(course_id)? {
+            let entry = grouped
+                .entry(normalized_latex.clone())
+                .or_insert_with(|| (latex.clone(), Vec::new(), Vec::new()));
+            if !entry.1.contains(&note_id) {
+                entry.1.push(note_id.clone());
+                if let Some(note) = note_lookup.get(&note_id) {
+                    entry.2.push(note.title.clone());
+                }
+            }
+            if latex.len() > entry.0.len() {
+                entry.0 = latex.clone();
+            }
+        }
+
+        Ok(grouped
+            .into_iter()
+            .map(
+                |(normalized_latex, (latex, note_ids, note_titles))| StoredFormulaAggregate {
+                    id: build_course_formula_id(course_id, &normalized_latex),
+                    latex,
+                    normalized_latex,
+                    note_count: note_ids.len(),
+                    source_hash: build_formula_source_hash(&note_ids, &note_lookup),
+                    source_note_ids: note_ids,
+                    source_note_titles: note_titles,
+                },
+            )
+            .collect())
+    }
+
+    fn build_formula_details(
+        &self,
+        course_id: &str,
+        aggregate: StoredFormulaAggregate,
+    ) -> Result<FormulaDetails> {
+        let note_lookup = self
+            .list_notes(course_id)?
+            .into_iter()
+            .map(|note| (note.id.clone(), note))
+            .collect::<HashMap<_, _>>();
+        let concept_map = self.list_concepts(course_id)?.into_iter().fold(
+            HashMap::<String, Vec<String>>::new(),
+            |mut acc, (note_id, concept, _, _)| {
+                acc.entry(note_id).or_default().push(concept);
+                acc
+            },
+        );
+        let formula_counts = self.list_formulas(course_id)?.into_iter().fold(
+            HashMap::<String, usize>::new(),
+            |mut acc, (note_id, _, _)| {
+                *acc.entry(note_id).or_insert(0) += 1;
+                acc
+            },
+        );
+        let linked_notes = aggregate
+            .source_note_ids
+            .iter()
+            .filter_map(|note_id| note_lookup.get(note_id))
+            .map(|note| FormulaLinkedNote {
+                note_id: note.id.clone(),
+                title: note.title.clone(),
+                relative_path: note.relative_path.clone(),
+                excerpt: note.excerpt.clone(),
+                headings: note.headings.clone(),
+                related_concepts: concept_map.get(&note.id).cloned().unwrap_or_default(),
+                formula_count: formula_counts.get(&note.id).copied().unwrap_or(0),
+            })
+            .collect::<Vec<_>>();
+        let related_concepts = self.list_related_concepts_for_notes(&aggregate.source_note_ids)?;
+        let headings = aggregate
+            .source_note_ids
+            .iter()
+            .filter_map(|note_id| note_lookup.get(note_id))
+            .flat_map(|note| note.headings.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let chunks = self
+            .load_note_chunks_for_notes(course_id, &aggregate.source_note_ids)?
+            .into_iter()
+            .filter(|chunk| {
+                chunk.text.contains(&aggregate.latex)
+                    || normalize_key(&chunk.text).contains(&aggregate.normalized_latex)
+            })
+            .take(8)
+            .map(|chunk| NoteChunkPreview {
+                chunk_id: chunk.chunk_id,
+                note_id: chunk.note_id,
+                note_title: chunk.note_title,
+                relative_path: chunk.relative_path,
+                heading_path: chunk.heading_path,
+                text: chunk.text,
+                ordinal: chunk.ordinal,
+            })
+            .collect::<Vec<_>>();
+        let brief =
+            self.get_cached_formula_brief(&aggregate.id, course_id, &aggregate.source_hash)?;
+
+        Ok(FormulaDetails {
+            course_id: course_id.to_string(),
+            id: aggregate.id,
+            latex: aggregate.latex,
+            normalized_latex: aggregate.normalized_latex,
+            note_count: aggregate.note_count,
+            source_note_ids: aggregate.source_note_ids,
+            source_note_titles: aggregate.source_note_titles,
+            linked_notes,
+            chunks,
+            related_concepts,
+            headings,
+            brief,
+        })
+    }
+
+    fn get_cached_formula_brief(
+        &self,
+        formula_id: &str,
+        course_id: &str,
+        source_hash: &str,
+    ) -> Result<Option<FormulaBrief>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT coach_json, practice_json, derivation_json, generated_at, model
+                FROM formula_briefs
+                WHERE formula_id = ?1 AND course_id = ?2 AND source_hash = ?3
+                ORDER BY generated_at DESC
+                LIMIT 1
+                "#,
+                params![formula_id, course_id, source_hash],
+                |row| {
+                    Ok(FormulaBrief {
+                        formula_id: formula_id.to_string(),
+                        coach: serde_json::from_str(&row.get::<_, String>(0)?)
+                            .map_err(|error| to_sql_error(anyhow!(error)))?,
+                        practice: serde_json::from_str(&row.get::<_, String>(1)?)
+                            .map_err(|error| to_sql_error(anyhow!(error)))?,
+                        derivation: serde_json::from_str(&row.get::<_, String>(2)?)
+                            .map_err(|error| to_sql_error(anyhow!(error)))?,
+                        generated_at: row.get(3)?,
+                        model: row.get(4)?,
+                        source_signature: source_hash.to_string(),
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn upsert_formula_brief(
+        &self,
+        formula_id: &str,
+        course_id: &str,
+        source_hash: &str,
+        brief: &FormulaBrief,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO formula_briefs (
+              formula_id, course_id, source_hash, coach_json, practice_json, derivation_json, generated_at, model
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(formula_id, source_hash) DO UPDATE SET
+              coach_json = excluded.coach_json,
+              practice_json = excluded.practice_json,
+              derivation_json = excluded.derivation_json,
+              generated_at = excluded.generated_at,
+              model = excluded.model
+            "#,
+            params![
+                formula_id,
+                course_id,
+                source_hash,
+                serde_json::to_string(&brief.coach)?,
+                serde_json::to_string(&brief.practice)?,
+                serde_json::to_string(&brief.derivation)?,
+                &brief.generated_at,
+                &brief.model,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn list_related_concepts_for_notes(&self, note_ids: &[String]) -> Result<Vec<String>> {
+        let note_id_set = note_ids.iter().cloned().collect::<HashSet<_>>();
+        Ok(note_ids
+            .iter()
+            .flat_map(|note_id| {
+                self.list_concepts_for_note(note_id)
+                    .unwrap_or_default()
+                    .into_iter()
+            })
+            .filter(|(note_id, _, _, _)| note_id_set.contains(note_id))
+            .map(|(_, concept, _, _)| concept)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .take(12)
+            .collect())
+    }
+
+    fn list_concepts_for_note(&self, note_id: &str) -> Result<Vec<(String, String, String, f64)>> {
+        let mut statement = self.conn.prepare(
+            "SELECT note_id, name, normalized_name, support_score FROM concept_records WHERE note_id = ?1 ORDER BY support_score DESC",
+        )?;
+        let rows = statement
+            .query_map(params![note_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, f64>(3)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn load_note_chunks_for_notes(
+        &self,
+        course_id: &str,
+        note_ids: &[String],
+    ) -> Result<Vec<StoredNoteChunk>> {
+        let note_id_set = note_ids.iter().cloned().collect::<HashSet<_>>();
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT note_chunks.chunk_id, note_chunks.note_id, note_chunks.course_id, note_records.title,
+                   note_records.relative_path, note_chunks.heading_path, note_chunks.text, note_chunks.ordinal
+            FROM note_chunks
+            INNER JOIN note_records ON note_records.id = note_chunks.note_id
+            WHERE note_chunks.course_id = ?1
+            ORDER BY note_chunks.ordinal ASC
+            "#,
+        )?;
+        let rows = statement
+            .query_map(params![course_id], |row| {
+                Ok(StoredNoteChunk {
+                    chunk_id: row.get(0)?,
+                    note_id: row.get(1)?,
+                    course_id: row.get(2)?,
+                    note_title: row.get(3)?,
+                    relative_path: row.get(4)?,
+                    heading_path: row.get(5)?,
+                    text: row.get(6)?,
+                    ordinal: row.get::<_, i64>(7)? as usize,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter(|chunk| note_id_set.contains(&chunk.note_id))
+            .collect())
+    }
+
+    fn search_chat_chunks(
+        &self,
+        scope: ChatScope,
+        course_id: Option<&str>,
+        query: &str,
+    ) -> Result<Vec<StoredNoteChunk>> {
+        let normalized_query = normalize_key(query);
+        let fts_query = build_fts_query(&normalized_query);
+        let mut rows = Vec::new();
+
+        if let Some(fts_query) = fts_query {
+            let query_sql = match scope {
+                ChatScope::Course => {
+                    let course_id =
+                        course_id.ok_or_else(|| anyhow!("course chat requires a course"))?;
+                    let mut statement = self.conn.prepare(
+                        r#"
+                        SELECT note_chunks.chunk_id, note_chunks.note_id, note_chunks.course_id, note_records.title,
+                               note_records.relative_path, note_chunks.heading_path, note_chunks.text, note_chunks.ordinal
+                        FROM note_chunks_fts
+                        INNER JOIN note_chunks ON note_chunks.chunk_id = note_chunks_fts.chunk_id
+                        INNER JOIN note_records ON note_records.id = note_chunks.note_id
+                        WHERE note_chunks_fts MATCH ?1 AND note_chunks.course_id = ?2
+                        ORDER BY bm25(note_chunks_fts)
+                        LIMIT 10
+                        "#
+                    )?;
+                    let mapped = statement.query_map(params![fts_query, course_id], |row| {
+                        Ok(StoredNoteChunk {
+                            chunk_id: row.get(0)?,
+                            note_id: row.get(1)?,
+                            course_id: row.get(2)?,
+                            note_title: row.get(3)?,
+                            relative_path: row.get(4)?,
+                            heading_path: row.get(5)?,
+                            text: row.get(6)?,
+                            ordinal: row.get::<_, i64>(7)? as usize,
+                        })
+                    })?;
+                    mapped.collect::<std::result::Result<Vec<_>, _>>()?
+                }
+                ChatScope::Vault => {
+                    let mut statement = self.conn.prepare(
+                        r#"
+                        SELECT note_chunks.chunk_id, note_chunks.note_id, note_chunks.course_id, note_records.title,
+                               note_records.relative_path, note_chunks.heading_path, note_chunks.text, note_chunks.ordinal
+                        FROM note_chunks_fts
+                        INNER JOIN note_chunks ON note_chunks.chunk_id = note_chunks_fts.chunk_id
+                        INNER JOIN note_records ON note_records.id = note_chunks.note_id
+                        WHERE note_chunks_fts MATCH ?1
+                        ORDER BY bm25(note_chunks_fts)
+                        LIMIT 10
+                        "#
+                    )?;
+                    let mapped = statement.query_map(params![fts_query], |row| {
+                        Ok(StoredNoteChunk {
+                            chunk_id: row.get(0)?,
+                            note_id: row.get(1)?,
+                            course_id: row.get(2)?,
+                            note_title: row.get(3)?,
+                            relative_path: row.get(4)?,
+                            heading_path: row.get(5)?,
+                            text: row.get(6)?,
+                            ordinal: row.get::<_, i64>(7)? as usize,
+                        })
+                    })?;
+                    mapped.collect::<std::result::Result<Vec<_>, _>>()?
+                }
+            };
+            rows.extend(query_sql);
+        }
+
+        let supplemental_note_ids = self.search_formula_note_ids(scope, course_id, query)?;
+        if !supplemental_note_ids.is_empty() {
+            let note_id_set = supplemental_note_ids.into_iter().collect::<HashSet<_>>();
+            let supplemental = self
+                .load_note_chunks_for_scope(scope, course_id)?
+                .into_iter()
+                .filter(|chunk| note_id_set.contains(&chunk.note_id))
+                .take(4)
+                .collect::<Vec<_>>();
+            rows.extend(supplemental);
+        }
+
+        let mut seen = HashSet::new();
+        rows.retain(|chunk| seen.insert(chunk.chunk_id.clone()));
+        Ok(rows.into_iter().take(10).collect())
+    }
+
+    fn search_formula_note_ids(
+        &self,
+        scope: ChatScope,
+        course_id: Option<&str>,
+        query: &str,
+    ) -> Result<Vec<String>> {
+        let normalized = normalize_key(query);
+        if normalized.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let like_query = format!("%{normalized}%");
+        let mut statement = match scope {
+            ChatScope::Course => self.conn.prepare(
+                "SELECT DISTINCT note_id FROM formula_records WHERE course_id = ?1 AND normalized_latex LIKE ?2 LIMIT 6",
+            )?,
+            ChatScope::Vault => self.conn.prepare(
+                "SELECT DISTINCT note_id FROM formula_records WHERE normalized_latex LIKE ?1 LIMIT 6",
+            )?,
+        };
+
+        let rows = match scope {
+            ChatScope::Course => statement
+                .query_map(
+                    params![
+                        course_id.ok_or_else(|| anyhow!("course chat requires a course"))?,
+                        like_query
+                    ],
+                    |row| row.get::<_, String>(0),
+                )?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            ChatScope::Vault => statement
+                .query_map(params![like_query], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        };
+        Ok(rows)
+    }
+
+    fn load_note_chunks_for_scope(
+        &self,
+        scope: ChatScope,
+        course_id: Option<&str>,
+    ) -> Result<Vec<StoredNoteChunk>> {
+        let mut statement = match scope {
+            ChatScope::Course => self.conn.prepare(
+                r#"
+                SELECT note_chunks.chunk_id, note_chunks.note_id, note_chunks.course_id, note_records.title,
+                       note_records.relative_path, note_chunks.heading_path, note_chunks.text, note_chunks.ordinal
+                FROM note_chunks
+                INNER JOIN note_records ON note_records.id = note_chunks.note_id
+                WHERE note_chunks.course_id = ?1
+                ORDER BY note_chunks.ordinal ASC
+                "#,
+            )?,
+            ChatScope::Vault => self.conn.prepare(
+                r#"
+                SELECT note_chunks.chunk_id, note_chunks.note_id, note_chunks.course_id, note_records.title,
+                       note_records.relative_path, note_chunks.heading_path, note_chunks.text, note_chunks.ordinal
+                FROM note_chunks
+                INNER JOIN note_records ON note_records.id = note_chunks.note_id
+                ORDER BY note_chunks.ordinal ASC
+                "#,
+            )?,
+        };
+        let rows = match scope {
+            ChatScope::Course => statement
+                .query_map(
+                    params![course_id.ok_or_else(|| anyhow!("course chat requires a course"))?],
+                    |row| {
+                        Ok(StoredNoteChunk {
+                            chunk_id: row.get(0)?,
+                            note_id: row.get(1)?,
+                            course_id: row.get(2)?,
+                            note_title: row.get(3)?,
+                            relative_path: row.get(4)?,
+                            heading_path: row.get(5)?,
+                            text: row.get(6)?,
+                            ordinal: row.get::<_, i64>(7)? as usize,
+                        })
+                    },
+                )?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+            ChatScope::Vault => statement
+                .query_map([], |row| {
+                    Ok(StoredNoteChunk {
+                        chunk_id: row.get(0)?,
+                        note_id: row.get(1)?,
+                        course_id: row.get(2)?,
+                        note_title: row.get(3)?,
+                        relative_path: row.get(4)?,
+                        heading_path: row.get(5)?,
+                        text: row.get(6)?,
+                        ordinal: row.get::<_, i64>(7)? as usize,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?,
+        };
+        Ok(rows)
+    }
+
+    fn read_chat_thread_row(&self, row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredChatThread> {
+        Ok(StoredChatThread {
+            id: row.get(0)?,
+            scope: chat_scope_from_str(&row.get::<_, String>(1)?).map_err(to_sql_error)?,
+            course_id: row.get(2)?,
+            title: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
+        })
+    }
+
+    fn build_chat_thread_summary(&self, thread: StoredChatThread) -> Result<ChatThreadSummary> {
+        let message_count: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM chat_messages WHERE thread_id = ?1",
+            params![&thread.id],
+            |row| row.get::<_, i64>(0).map(|value| value as usize),
+        )?;
+        let last_message_preview = self.conn.query_row(
+            "SELECT content FROM chat_messages WHERE thread_id = ?1 ORDER BY created_at DESC LIMIT 1",
+            params![&thread.id],
+            |row| row.get::<_, String>(0),
+        ).optional()?.map(|content| truncate_excerpt(&content, 120));
+        let course_name = thread
+            .course_id
+            .as_deref()
+            .and_then(|course_id| self.find_course(course_id).ok().flatten())
+            .map(|course| course.name);
+
+        Ok(ChatThreadSummary {
+            id: thread.id,
+            scope: thread.scope,
+            course_id: thread.course_id,
+            course_name,
+            title: thread.title,
+            created_at: thread.created_at,
+            updated_at: thread.updated_at,
+            message_count,
+            last_message_preview,
+        })
+    }
+
+    fn find_chat_thread(&self, thread_id: &str) -> Result<Option<StoredChatThread>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT id, scope, course_id, title, created_at, updated_at
+                FROM chat_threads
+                WHERE id = ?1
+                "#,
+                params![thread_id],
+                |row| self.read_chat_thread_row(row),
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn load_chat_messages(&self, thread_id: &str) -> Result<Vec<ChatMessage>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT id, role, content, used_fallback, fallback_reason, created_at
+            FROM chat_messages
+            WHERE thread_id = ?1
+            ORDER BY created_at ASC
+            "#,
+        )?;
+        let raw_rows = statement
+            .query_map(params![thread_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut messages = Vec::with_capacity(raw_rows.len());
+        for (id, role, content, used_fallback, fallback_reason, created_at) in raw_rows {
+            messages.push(ChatMessage {
+                citations: self.load_chat_citations(&id)?,
+                id: id.clone(),
+                thread_id: thread_id.to_string(),
+                role: chat_message_role_from_str(&role)?,
+                content,
+                used_fallback: used_fallback.map(|value| value == 1).unwrap_or(false),
+                fallback_reason,
+                created_at,
+            });
+        }
+        Ok(messages)
+    }
+
+    fn load_chat_citations(&self, message_id: &str) -> Result<Vec<ChatCitation>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT note_id, note_title, relative_path, chunk_id, heading_path, excerpt,
+                   course_id, course_name, relevance
+            FROM chat_citations
+            WHERE message_id = ?1
+            ORDER BY position ASC
+            "#,
+        )?;
+        let rows = statement
+            .query_map(params![message_id], |row| {
+                Ok(ChatCitation {
+                    chunk_id: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    note_id: row.get(0)?,
+                    note_title: row.get(1)?,
+                    relative_path: row.get(2)?,
+                    heading_path: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                    excerpt: row.get(5)?,
+                    course_id: row.get(6)?,
+                    course_name: row.get(7)?,
+                    relevance: row.get(8)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     fn total_note_count(&self) -> Result<usize> {
         self.conn
             .query_row("SELECT COUNT(*) FROM note_records", [], |row| {
@@ -2914,20 +4044,20 @@ impl Database {
             .into_iter()
             .map(|note| (note.id.clone(), note))
             .collect::<HashMap<_, _>>();
-        let concept_counts = self
-            .list_concepts(course_id)?
-            .into_iter()
-            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _, _)| {
+        let concept_counts = self.list_concepts(course_id)?.into_iter().fold(
+            HashMap::<String, usize>::new(),
+            |mut acc, (note_id, _, _, _)| {
                 *acc.entry(note_id).or_insert(0) += 1;
                 acc
-            });
-        let formula_counts = self
-            .list_formulas(course_id)?
-            .into_iter()
-            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _)| {
+            },
+        );
+        let formula_counts = self.list_formulas(course_id)?.into_iter().fold(
+            HashMap::<String, usize>::new(),
+            |mut acc, (note_id, _, _)| {
                 *acc.entry(note_id).or_insert(0) += 1;
                 acc
-            });
+            },
+        );
         let ai_states = self.list_ai_note_states(course_id)?;
         let exam_records = self.list_exam_records(course_id)?;
         let history = self.list_exam_attempt_summaries(course_id)?;
@@ -3013,20 +4143,20 @@ impl Database {
             .into_iter()
             .map(|note| (note.id.clone(), note))
             .collect::<HashMap<_, _>>();
-        let concept_counts = self
-            .list_concepts(course_id)?
-            .into_iter()
-            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _, _)| {
+        let concept_counts = self.list_concepts(course_id)?.into_iter().fold(
+            HashMap::<String, usize>::new(),
+            |mut acc, (note_id, _, _, _)| {
                 *acc.entry(note_id).or_insert(0) += 1;
                 acc
-            });
-        let formula_counts = self
-            .list_formulas(course_id)?
-            .into_iter()
-            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _)| {
+            },
+        );
+        let formula_counts = self.list_formulas(course_id)?.into_iter().fold(
+            HashMap::<String, usize>::new(),
+            |mut acc, (note_id, _, _)| {
                 *acc.entry(note_id).or_insert(0) += 1;
                 acc
-            });
+            },
+        );
         let ai_states = self.list_ai_note_states(course_id)?;
 
         let rows = self
@@ -3046,7 +4176,10 @@ impl Database {
         Ok(rows)
     }
 
-    fn list_note_mastery_by_course(&self, course_id: &str) -> Result<HashMap<String, StoredNoteMastery>> {
+    fn list_note_mastery_by_course(
+        &self,
+        course_id: &str,
+    ) -> Result<HashMap<String, StoredNoteMastery>> {
         let mut statement = self.conn.prepare(
             "SELECT note_id, mastery_state, last_accuracy FROM note_mastery_states WHERE course_id = ?1",
         )?;
@@ -3172,7 +4305,8 @@ impl Database {
             title: row.get(2)?,
             preset: exam_preset_from_str(&row.get::<_, String>(3)?).map_err(to_sql_error)?,
             status: exam_status_from_str(&row.get::<_, String>(4)?).map_err(to_sql_error)?,
-            difficulty: exam_difficulty_from_str(&row.get::<_, String>(5)?).map_err(to_sql_error)?,
+            difficulty: exam_difficulty_from_str(&row.get::<_, String>(5)?)
+                .map_err(to_sql_error)?,
             question_count: row.get::<_, i64>(6)? as usize,
             source_note_count: row.get::<_, i64>(7)? as usize,
             multiple_choice_count: row.get::<_, i64>(8)? as usize,
@@ -3189,7 +4323,11 @@ impl Database {
         })
     }
 
-    fn load_exam_questions(&self, exam_id: &str, hide_answer_key: bool) -> Result<Vec<ExamQuestion>> {
+    fn load_exam_questions(
+        &self,
+        exam_id: &str,
+        hide_answer_key: bool,
+    ) -> Result<Vec<ExamQuestion>> {
         let mut statement = self.conn.prepare(
             r#"
             SELECT id, exam_id, position, question_type, prompt, options_json, correct_answer,
@@ -3212,8 +4350,16 @@ impl Database {
                     options: from_json_vec::<String>(&row.get::<_, String>(5)?),
                     source_note_id: row.get(8)?,
                     source_note_title: row.get(9)?,
-                    expected_answer: if hide_answer_key { None } else { Some(row.get(6)?) },
-                    explanation: if hide_answer_key { None } else { Some(row.get(7)?) },
+                    expected_answer: if hide_answer_key {
+                        None
+                    } else {
+                        Some(row.get(6)?)
+                    },
+                    explanation: if hide_answer_key {
+                        None
+                    } else {
+                        Some(row.get(7)?)
+                    },
                     user_answer: None,
                     is_correct: None,
                     feedback: None,
@@ -3261,7 +4407,11 @@ impl Database {
                 WHERE exam_attempts.id = ?1
                 "#,
                 params![attempt_id],
-                |row| Ok(StoredExamAttempt { course_id: row.get(0)? }),
+                |row| {
+                    Ok(StoredExamAttempt {
+                        course_id: row.get(0)?,
+                    })
+                },
             )
             .optional()
             .map_err(Into::into)
@@ -3278,20 +4428,20 @@ impl Database {
             .into_iter()
             .map(|note| (note.id.clone(), note))
             .collect::<HashMap<_, _>>();
-        let concept_counts = self
-            .list_concepts(course_id)?
-            .into_iter()
-            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _, _)| {
+        let concept_counts = self.list_concepts(course_id)?.into_iter().fold(
+            HashMap::<String, usize>::new(),
+            |mut acc, (note_id, _, _, _)| {
                 *acc.entry(note_id).or_insert(0) += 1;
                 acc
-            });
-        let formula_counts = self
-            .list_formulas(course_id)?
-            .into_iter()
-            .fold(HashMap::<String, usize>::new(), |mut acc, (note_id, _, _)| {
+            },
+        );
+        let formula_counts = self.list_formulas(course_id)?.into_iter().fold(
+            HashMap::<String, usize>::new(),
+            |mut acc, (note_id, _, _)| {
                 *acc.entry(note_id).or_insert(0) += 1;
                 acc
-            });
+            },
+        );
         let ai_states = self.list_ai_note_states(course_id)?;
 
         Ok(note_ids
@@ -3354,7 +4504,7 @@ impl Database {
 
         Ok(Some(StoredExamGenerationJob { exam, notes }))
     }
-    
+
     fn load_exam_generation_notes(
         &self,
         course_id: &str,
@@ -3380,20 +4530,20 @@ impl Database {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
-        let concepts = self
-            .list_concepts(course_id)?
-            .into_iter()
-            .fold(HashMap::<String, Vec<String>>::new(), |mut acc, (note_id, name, _, _)| {
+        let concepts = self.list_concepts(course_id)?.into_iter().fold(
+            HashMap::<String, Vec<String>>::new(),
+            |mut acc, (note_id, name, _, _)| {
                 acc.entry(note_id).or_default().push(name);
                 acc
-            });
-        let formulas = self
-            .list_formulas(course_id)?
-            .into_iter()
-            .fold(HashMap::<String, Vec<String>>::new(), |mut acc, (note_id, latex, _)| {
+            },
+        );
+        let formulas = self.list_formulas(course_id)?.into_iter().fold(
+            HashMap::<String, Vec<String>>::new(),
+            |mut acc, (note_id, latex, _)| {
                 acc.entry(note_id).or_default().push(latex);
                 acc
-            });
+            },
+        );
         let row_lookup = rows
             .into_iter()
             .map(|row| (row.0.clone(), row))
@@ -3583,9 +4733,9 @@ impl Database {
             };
             self.upsert_note_mastery(note_id, course_id, current_state, Some(accuracy))?;
 
-            let note = note_lookup
-                .get(note_id)
-                .ok_or_else(|| anyhow!("note {note_id} not found while building exam suggestions"))?;
+            let note = note_lookup.get(note_id).ok_or_else(|| {
+                anyhow!("note {note_id} not found while building exam suggestions")
+            })?;
             suggestions.push(ExamReviewSuggestion {
                 note_id: note_id.clone(),
                 title: note.title.clone(),
@@ -3789,7 +4939,41 @@ fn exam_verdict_to_str(value: ExamVerdict) -> &'static str {
     }
 }
 
-fn to_sql_error(error: anyhow::Error) -> rusqlite::Error {
+fn chat_scope_to_str(value: ChatScope) -> &'static str {
+    match value {
+        ChatScope::Course => "course",
+        ChatScope::Vault => "vault",
+    }
+}
+
+fn chat_scope_from_str(value: &str) -> Result<ChatScope> {
+    match value {
+        "course" => Ok(ChatScope::Course),
+        "vault" => Ok(ChatScope::Vault),
+        _ => Err(anyhow!("unknown chat scope `{value}`")),
+    }
+}
+
+fn chat_message_role_to_str(value: ChatMessageRole) -> &'static str {
+    match value {
+        ChatMessageRole::User => "user",
+        ChatMessageRole::Assistant => "assistant",
+    }
+}
+
+fn chat_message_role_from_str(value: &str) -> Result<ChatMessageRole> {
+    match value {
+        "user" => Ok(ChatMessageRole::User),
+        "assistant" => Ok(ChatMessageRole::Assistant),
+        _ => Err(anyhow!("unknown chat message role `{value}`")),
+    }
+}
+
+fn to_sql_error<E>(error: E) -> rusqlite::Error
+where
+    E: Into<anyhow::Error>,
+{
+    let error = error.into();
     rusqlite::Error::FromSqlConversionFailure(
         0,
         rusqlite::types::Type::Text,
@@ -4187,6 +5371,16 @@ fn truncate_error(message: &str) -> String {
     message.chars().take(limit).collect::<String>()
 }
 
+fn truncate_excerpt(message: &str, limit: usize) -> String {
+    if message.chars().count() <= limit {
+        return message.to_string();
+    }
+
+    let mut truncated = message.chars().take(limit).collect::<String>();
+    truncated.push_str("...");
+    truncated
+}
+
 fn group_concepts_by_key(
     concepts: &[(String, String, String, f64)],
 ) -> HashMap<String, HashSet<String>> {
@@ -4424,6 +5618,37 @@ fn bool_to_int(value: bool) -> i64 {
     }
 }
 
+fn build_fts_query(normalized_query: &str) -> Option<String> {
+    let tokens = normalized_query
+        .split_whitespace()
+        .filter(|token| token.len() >= 2)
+        .map(|token| format!("{token}*"))
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens.join(" OR "))
+    }
+}
+
+fn summarize_thread_title(message: &str) -> String {
+    let normalized = message.trim();
+    if normalized.is_empty() {
+        return "New conversation".to_string();
+    }
+
+    let title = normalized
+        .split_whitespace()
+        .take(7)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if title.chars().count() > 56 {
+        truncate_excerpt(&title, 56)
+    } else {
+        title
+    }
+}
+
 fn now_string() -> String {
     Utc::now().to_rfc3339()
 }
@@ -4502,6 +5727,10 @@ fn build_note_id(course_id: &str, relative_path: &str) -> String {
     )
 }
 
+fn build_note_chunk_id(note_id: &str, ordinal: usize) -> String {
+    format!("chunk::{note_id}::{ordinal}")
+}
+
 fn build_seed_course_id(folder: &str) -> String {
     format!("course::{}", normalize_key(folder).replace(' ', "_"))
 }
@@ -4515,6 +5744,98 @@ fn build_formula_id(note_id: &str, formula: &str) -> String {
         "formula::{note_id}::{}",
         normalize_key(formula).replace(' ', "_")
     )
+}
+
+fn build_course_formula_id(course_id: &str, normalized_formula: &str) -> String {
+    format!(
+        "formula::{course_id}::{}",
+        normalized_formula.replace(' ', "_")
+    )
+}
+
+fn build_formula_source_hash(
+    note_ids: &[String],
+    note_lookup: &HashMap<String, StoredNote>,
+) -> String {
+    let mut values = note_ids
+        .iter()
+        .filter_map(|note_id| note_lookup.get(note_id))
+        .map(|note| format!("{}::{}", note.id, note.content_hash))
+        .collect::<Vec<_>>();
+    values.sort();
+    hash_content(&values.join("|"))
+}
+
+fn build_note_chunks(content: &str, headings: &[String]) -> Vec<ParsedNoteChunk> {
+    let mut chunks = Vec::new();
+    let mut current_heading = headings
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "Overview".to_string());
+    let mut heading_stack = Vec::<String>::new();
+    let mut current_lines = Vec::<String>::new();
+    let mut ordinal = 0usize;
+
+    for raw_line in content.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.starts_with('#') {
+            if let Some(chunk) = flush_chunk(&current_heading, &current_lines, ordinal) {
+                chunks.push(chunk);
+                ordinal += 1;
+            }
+
+            let level = trimmed.chars().take_while(|ch| *ch == '#').count();
+            let heading = trimmed[level..].trim();
+            if !heading.is_empty() {
+                while heading_stack.len() >= level {
+                    heading_stack.pop();
+                }
+                heading_stack.push(heading.to_string());
+                current_heading = heading_stack.join(" / ");
+            }
+            current_lines.clear();
+            continue;
+        }
+
+        if !trimmed.is_empty() {
+            current_lines.push(trimmed.to_string());
+        }
+    }
+
+    if let Some(chunk) = flush_chunk(&current_heading, &current_lines, ordinal) {
+        chunks.push(chunk);
+    }
+
+    if chunks.is_empty() {
+        if let Some(chunk) = flush_chunk(
+            "Overview",
+            &content
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
+            0,
+        ) {
+            chunks.push(chunk);
+        }
+    }
+
+    chunks
+}
+
+fn flush_chunk(heading_path: &str, lines: &[String], ordinal: usize) -> Option<ParsedNoteChunk> {
+    let text = lines.join(" ");
+    let cleaned = truncate_excerpt(text.trim(), 700);
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    Some(ParsedNoteChunk {
+        heading_path: heading_path.to_string(),
+        text: cleaned,
+        ordinal,
+    })
 }
 
 fn build_edge_id(course_id: &str, from_note_id: &str, to_note_id: &str, edge_type: &str) -> String {
@@ -4546,9 +5867,10 @@ mod tests {
 
     use super::Database;
     use crate::models::{
-        AiSettingsInput, ApplyExamReviewActionsRequest, CourseConfigInput, ExamBuilderInput,
-        ExamDifficulty, ExamPreset, ExamReviewAction, ExamSubmissionRequest,
-        FlashcardGenerationRequest, NoteMasteryState, RevisionNoteRequest,
+        AiSettingsInput, ApplyExamReviewActionsRequest, ChatScope, CourseConfigInput,
+        CreateChatThreadRequest, ExamBuilderInput, ExamDifficulty, ExamPreset, ExamReviewAction,
+        ExamSubmissionRequest, FlashcardGenerationRequest, GenerateFormulaBriefRequest,
+        NoteMasteryState, RevisionNoteRequest, SendChatMessageRequest,
     };
 
     #[test]
@@ -4699,12 +6021,10 @@ mod tests {
 
         let exam_id = workspace_ready.ready_exams[0].id.clone();
         let public_details = database.get_exam_details(&exam_id).expect("exam details");
-        assert!(
-            public_details
-                .questions
-                .iter()
-                .all(|question| question.expected_answer.is_none() && question.explanation.is_none())
-        );
+        assert!(public_details
+            .questions
+            .iter()
+            .all(|question| question.expected_answer.is_none() && question.explanation.is_none()));
 
         let stored_questions = database
             .load_exam_questions(&exam_id, false)
@@ -4732,18 +6052,14 @@ mod tests {
             .submit_exam_attempt(ExamSubmissionRequest { exam_id, answers })
             .expect("submit exam");
         assert_eq!(attempt.note_suggestions.len(), 2);
-        assert!(
-            attempt
-                .note_suggestions
-                .iter()
-                .any(|suggestion| suggestion.recommended_state == NoteMasteryState::Mastered)
-        );
-        assert!(
-            attempt
-                .note_suggestions
-                .iter()
-                .any(|suggestion| suggestion.recommended_state == NoteMasteryState::Review)
-        );
+        assert!(attempt
+            .note_suggestions
+            .iter()
+            .any(|suggestion| suggestion.recommended_state == NoteMasteryState::Mastered));
+        assert!(attempt
+            .note_suggestions
+            .iter()
+            .any(|suggestion| suggestion.recommended_state == NoteMasteryState::Review));
 
         let review_actions = attempt
             .note_suggestions
@@ -4764,18 +6080,14 @@ mod tests {
         assert_eq!(updated_workspace.summary.review_count, 1);
         assert_eq!(updated_workspace.summary.mastered_count, 1);
         assert_eq!(updated_workspace.history.len(), 1);
-        assert!(
-            updated_workspace
-                .review_notes
-                .iter()
-                .any(|note| note.note_id != mastered_note_id)
-        );
-        assert!(
-            updated_workspace
-                .mastered_notes
-                .iter()
-                .any(|note| note.note_id == mastered_note_id)
-        );
+        assert!(updated_workspace
+            .review_notes
+            .iter()
+            .any(|note| note.note_id != mastered_note_id));
+        assert!(updated_workspace
+            .mastered_notes
+            .iter()
+            .any(|note| note.note_id == mastered_note_id));
 
         let reopened = Database::open(&db_path).expect("reopen database");
         let reopened_workspace = reopened
@@ -4836,6 +6148,289 @@ mod tests {
         assert!(error.to_string().contains("enable AI"));
     }
 
+    #[test]
+    fn formula_workspace_and_brief_cache_invalidation_work() {
+        let temp = tempdir().expect("temp dir");
+        let vault_dir = temp.path().join("vault");
+        let course_dir = vault_dir.join("math");
+        fs::create_dir_all(&course_dir).expect("course dir");
+        fs::write(
+            course_dir.join("limits.md"),
+            "# Limits\n\nDefinition of limits.\n\n$\\lim_{x \\to a} f(x) = L$\n",
+        )
+        .expect("write limits");
+        fs::write(
+            course_dir.join("continuity.md"),
+            "# Continuity\n\nLimits connect to continuity.\n\n$\\lim_{x \\to a} f(x) = L$\n",
+        )
+        .expect("write continuity");
+
+        let db_path = temp.path().join("exam-os.sqlite");
+        let database = Database::open(&db_path).expect("database");
+        database
+            .connect_vault(vault_dir.to_string_lossy().as_ref())
+            .expect("connect vault");
+        let course_id = database
+            .save_course_config(CourseConfigInput {
+                id: None,
+                name: "Math".to_string(),
+                folder: "math".to_string(),
+                exam_date: None,
+                revision_folder: None,
+                flashcards_folder: None,
+            })
+            .expect("save course");
+        database.run_scan().expect("scan");
+        database
+            .save_ai_settings(AiSettingsInput {
+                base_url: "mock://formula".to_string(),
+                model: "mock-model".to_string(),
+                api_key: None,
+                enabled: true,
+                timeout_ms: Some(2_000),
+            })
+            .expect("save ai");
+
+        let formula_workspace = database
+            .get_formula_workspace(Some(course_id.clone()))
+            .expect("workspace")
+            .expect("workspace present");
+        assert_eq!(formula_workspace.formulas.len(), 1);
+        assert_eq!(formula_workspace.summary.notes_with_formulas, 2);
+        let formula_id = formula_workspace.formulas[0].id.clone();
+        let details = database
+            .get_formula_details(&formula_id, &course_id)
+            .expect("formula details");
+        assert_eq!(details.linked_notes.len(), 2);
+        assert!(!details.chunks.is_empty());
+
+        let first_brief = database
+            .generate_formula_brief(GenerateFormulaBriefRequest {
+                course_id: course_id.clone(),
+                formula_id: formula_id.clone(),
+                force: Some(false),
+            })
+            .expect("first brief");
+        let cached_brief = database
+            .generate_formula_brief(GenerateFormulaBriefRequest {
+                course_id: course_id.clone(),
+                formula_id: formula_id.clone(),
+                force: Some(false),
+            })
+            .expect("cached brief");
+        assert_eq!(first_brief.source_signature, cached_brief.source_signature);
+        assert_eq!(first_brief.generated_at, cached_brief.generated_at);
+
+        fs::write(
+            course_dir.join("continuity.md"),
+            "# Continuity\n\nLimits connect to continuity and local behavior.\n\n$\\lim_{x \\to a} f(x) = L$\n",
+        )
+        .expect("rewrite continuity");
+        database.run_scan().expect("rescan");
+
+        let refreshed_brief = database
+            .generate_formula_brief(GenerateFormulaBriefRequest {
+                course_id,
+                formula_id,
+                force: Some(false),
+            })
+            .expect("refreshed brief");
+        assert_ne!(
+            first_brief.source_signature,
+            refreshed_brief.source_signature
+        );
+    }
+
+    #[test]
+    fn chat_threads_persist_and_scope_filters_citations() {
+        let temp = tempdir().expect("temp dir");
+        let vault_dir = temp.path().join("vault");
+        let math_dir = vault_dir.join("math");
+        let physics_dir = vault_dir.join("physics");
+        fs::create_dir_all(&math_dir).expect("math dir");
+        fs::create_dir_all(&physics_dir).expect("physics dir");
+        fs::write(
+            math_dir.join("limits.md"),
+            "# Limits\n\nLimits describe how a function behaves near a point.\n",
+        )
+        .expect("write limits");
+        fs::write(
+            physics_dir.join("circuits.md"),
+            "# Circuits\n\nCurrent through a resistor follows Ohm's law.\n",
+        )
+        .expect("write circuits");
+
+        let db_path = temp.path().join("exam-os.sqlite");
+        let database = Database::open(&db_path).expect("database");
+        database
+            .connect_vault(vault_dir.to_string_lossy().as_ref())
+            .expect("connect vault");
+        let math_course_id = database
+            .save_course_config(CourseConfigInput {
+                id: None,
+                name: "Math".to_string(),
+                folder: "math".to_string(),
+                exam_date: None,
+                revision_folder: None,
+                flashcards_folder: None,
+            })
+            .expect("save math");
+        let physics_course_id = database
+            .save_course_config(CourseConfigInput {
+                id: None,
+                name: "Physics".to_string(),
+                folder: "physics".to_string(),
+                exam_date: None,
+                revision_folder: None,
+                flashcards_folder: None,
+            })
+            .expect("save physics");
+        database
+            .get_dashboard(Some(math_course_id.clone()))
+            .expect("math dashboard");
+        database.run_scan().expect("scan math");
+        database
+            .get_dashboard(Some(physics_course_id.clone()))
+            .expect("physics dashboard");
+        database.run_scan().expect("scan physics");
+        database
+            .save_ai_settings(AiSettingsInput {
+                base_url: "mock://chat".to_string(),
+                model: "mock-model".to_string(),
+                api_key: None,
+                enabled: true,
+                timeout_ms: Some(2_000),
+            })
+            .expect("save ai");
+
+        let course_thread = database
+            .create_chat_thread(CreateChatThreadRequest {
+                scope: ChatScope::Course,
+                course_id: Some(math_course_id.clone()),
+                title: None,
+            })
+            .expect("course thread");
+        let course_reply = database
+            .send_chat_message(SendChatMessageRequest {
+                thread_id: course_thread.id.clone(),
+                content: "What is a limit?".to_string(),
+            })
+            .expect("course reply");
+        let last_course_message = course_reply.messages.last().expect("assistant message");
+        assert!(last_course_message
+            .citations
+            .iter()
+            .all(|citation| citation.course_id == math_course_id));
+
+        let vault_thread = database
+            .create_chat_thread(CreateChatThreadRequest {
+                scope: ChatScope::Vault,
+                course_id: None,
+                title: None,
+            })
+            .expect("vault thread");
+        let vault_reply = database
+            .send_chat_message(SendChatMessageRequest {
+                thread_id: vault_thread.id.clone(),
+                content: "How does current behave in a resistor?".to_string(),
+            })
+            .expect("vault reply");
+        let last_vault_message = vault_reply.messages.last().expect("assistant message");
+        assert!(last_vault_message
+            .citations
+            .iter()
+            .any(|citation| citation.course_id == physics_course_id));
+
+        let reopened = Database::open(&db_path).expect("reopen");
+        let reopened_thread = reopened
+            .get_chat_thread(&course_thread.id)
+            .expect("reopened thread");
+        assert!(reopened_thread.messages.len() >= 2);
+        let thread_summaries = reopened
+            .list_chat_threads(ChatScope::Course, Some(math_course_id))
+            .expect("thread summaries");
+        assert_eq!(thread_summaries.len(), 1);
+    }
+
+    #[test]
+    fn formula_and_chat_require_enabled_ai() {
+        let temp = tempdir().expect("temp dir");
+        let db_path = temp.path().join("exam-os.sqlite");
+        let (math_id, _physics_id) = setup_formula_chat_vault(temp.path());
+
+        let database = Database::open(&db_path).expect("database");
+        database
+            .connect_vault(temp.path().join("vault").to_string_lossy().as_ref())
+            .expect("connect vault");
+        database
+            .save_course_config(CourseConfigInput {
+                id: Some(math_id.clone()),
+                name: "Math".to_string(),
+                folder: "math".to_string(),
+                exam_date: None,
+                revision_folder: None,
+                flashcards_folder: None,
+            })
+            .expect("save math");
+        database
+            .save_course_config(CourseConfigInput {
+                id: Some("course::physics".to_string()),
+                name: "Physics".to_string(),
+                folder: "physics".to_string(),
+                exam_date: None,
+                revision_folder: None,
+                flashcards_folder: None,
+            })
+            .expect("save physics");
+        database
+            .get_dashboard(Some(math_id.clone()))
+            .expect("select math dashboard");
+        database.run_scan().expect("scan");
+        database
+            .save_ai_settings(AiSettingsInput {
+                base_url: "mock://chat".to_string(),
+                model: "mock-model".to_string(),
+                api_key: None,
+                enabled: false,
+                timeout_ms: Some(2_000),
+            })
+            .expect("disable ai");
+
+        let formula_workspace = database
+            .get_formula_workspace(Some(math_id.clone()))
+            .expect("formula workspace")
+            .expect("formula workspace present");
+        let formula_id = formula_workspace
+            .formulas
+            .first()
+            .expect("formula entry")
+            .id
+            .clone();
+        let formula_error = database
+            .generate_formula_brief(GenerateFormulaBriefRequest {
+                course_id: math_id.clone(),
+                formula_id,
+                force: Some(false),
+            })
+            .expect_err("formula brief should fail when AI is disabled");
+        assert!(formula_error.to_string().contains("enable AI"));
+
+        let thread = database
+            .create_chat_thread(CreateChatThreadRequest {
+                scope: ChatScope::Course,
+                course_id: Some(math_id),
+                title: None,
+            })
+            .expect("create thread");
+        let chat_error = database
+            .send_chat_message(SendChatMessageRequest {
+                thread_id: thread.id,
+                content: "What is a limit?".to_string(),
+            })
+            .expect_err("chat should fail when AI is disabled");
+        assert!(chat_error.to_string().contains("enable AI"));
+    }
+
     fn setup_exam_course(root: &std::path::Path) -> String {
         let vault_dir = root.join("vault");
         let course_dir = vault_dir.join("math");
@@ -4857,5 +6452,36 @@ mod tests {
         .expect("write derivatives");
 
         "course::math".to_string()
+    }
+
+    fn setup_formula_chat_vault(root: &std::path::Path) -> (String, String) {
+        let vault_dir = root.join("vault");
+        let math_dir = vault_dir.join("math");
+        let physics_dir = vault_dir.join("physics");
+        fs::create_dir_all(&math_dir).expect("math dir");
+        fs::create_dir_all(&physics_dir).expect("physics dir");
+
+        fs::write(
+            math_dir.join("limits.md"),
+            "# Limits\n\n## Definition\n\nLimits describe how a function behaves near a point.\n$\\lim_{x\\to a} f(x)$\n\n## Connections\n\nSee [[continuity]].",
+        )
+        .expect("write limits");
+        fs::write(
+            math_dir.join("continuity.md"),
+            "# Continuity\n\n## Limit test\n\nContinuity connects to the same symbolic limit.\n$\\lim_{x\\to a} f(x)$\n\n## Rule\n\nA function is continuous when local behavior stays stable.",
+        )
+        .expect("write continuity");
+        fs::write(
+            math_dir.join("derivatives.md"),
+            "# Derivatives\n\n## Rate of change\n\nThe derivative captures the instantaneous rate of change.\n$f'(x)$",
+        )
+        .expect("write derivatives");
+        fs::write(
+            physics_dir.join("velocity.md"),
+            "# Velocity\n\n## Definition\n\nVelocity measures how position changes over time.\n$v = d / t$\n\n## Units\n\nUse displacement over time to calculate velocity.",
+        )
+        .expect("write velocity");
+
+        ("course::math".to_string(), "course::physics".to_string())
     }
 }

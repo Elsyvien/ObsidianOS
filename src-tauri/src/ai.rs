@@ -6,7 +6,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
 
-use crate::models::{ExamAnswerValue, ExamBuilderInput, ExamQuestionType, ExamVerdict};
+use crate::models::{
+    ChatMessageRole, ChatScope, ExamAnswerValue, ExamBuilderInput, ExamQuestionType, ExamVerdict,
+    FormulaCoach, FormulaDerivation, FormulaPractice,
+};
 
 #[derive(Debug, Clone)]
 pub struct AiProviderSettings {
@@ -106,6 +109,34 @@ pub struct GradedExamQuestion {
     pub expected_answer: String,
     pub explanation: String,
     pub feedback: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaBriefPayload {
+    pub coach: FormulaCoach,
+    pub practice: FormulaPractice,
+    pub derivation: FormulaDerivation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatContextChunkInput {
+    pub citation_id: String,
+    pub note_id: String,
+    pub note_title: String,
+    pub relative_path: String,
+    pub heading_path: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatAnswerPayload {
+    pub answer: String,
+    pub citation_ids: Vec<String>,
+    pub used_fallback: bool,
+    pub fallback_reason: Option<String>,
 }
 
 pub fn validate_settings(settings: &AiProviderSettings) -> Result<String> {
@@ -359,6 +390,166 @@ pub fn grade_exam_attempt(
     validate_grading_payload(questions, grading)
 }
 
+pub fn generate_formula_brief(
+    settings: &AiProviderSettings,
+    course_name: &str,
+    latex: &str,
+    related_concepts: &[String],
+    headings: &[String],
+    chunks: &[ChatContextChunkInput],
+) -> Result<FormulaBriefPayload> {
+    ensure_required(settings)?;
+
+    if settings.base_url.starts_with("mock://") {
+        return Ok(build_mock_formula_brief(
+            course_name,
+            latex,
+            related_concepts,
+            headings,
+            chunks,
+        ));
+    }
+
+    let chunk_payload = chunks
+        .iter()
+        .map(|chunk| {
+            format!(
+                "{} | {} | {} | {}\n{}",
+                chunk.citation_id,
+                chunk.note_title,
+                chunk.relative_path,
+                chunk.heading_path,
+                chunk.text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+
+    let prompt = format!(
+        "Generate a formula study brief for the course `{course_name}` and the formula `{latex}`. \
+         Return strict JSON only with keys `coach`, `practice`, and `derivation`. \
+         `coach` must contain `meaning`, `symbolBreakdown`, `useCases`, and `pitfalls`. \
+         `practice` must contain `recallPrompts`, `shortAnswerDrills`, and `multipleChoiceChecks`. \
+         `derivation` must contain `assumptions`, `intuition`, and `outline`. \
+         Use the provided note context only.\n\
+         Related concepts: {}\n\
+         Headings: {}",
+        related_concepts.join(", "),
+        headings.join(" | ")
+    );
+
+    let payload = json!({
+        "model": settings.model,
+        "temperature": 0.2,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are a formula tutor. Return JSON only."
+            },
+            { "role": "user", "content": prompt },
+            { "role": "user", "content": chunk_payload }
+        ]
+    });
+
+    let json = send_chat_request(settings, payload)?;
+    let content = message_content(&json)?;
+    let brief: FormulaBriefPayload = parse_json_blob(&content)?;
+    validate_formula_brief(&brief)?;
+    Ok(brief)
+}
+
+pub fn answer_chat_query(
+    settings: &AiProviderSettings,
+    scope: ChatScope,
+    course_name: Option<&str>,
+    transcript: &[(ChatMessageRole, String)],
+    user_message: &str,
+    chunks: &[ChatContextChunkInput],
+    allow_fallback: bool,
+) -> Result<ChatAnswerPayload> {
+    ensure_required(settings)?;
+
+    if settings.base_url.starts_with("mock://") {
+        return Ok(build_mock_chat_answer(
+            scope,
+            course_name,
+            user_message,
+            chunks,
+            allow_fallback,
+        ));
+    }
+
+    let transcript_payload = transcript
+        .iter()
+        .rev()
+        .take(6)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|(role, content)| match role {
+            ChatMessageRole::User => format!("User: {content}"),
+            ChatMessageRole::Assistant => format!("Assistant: {content}"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let chunk_payload = if chunks.is_empty() {
+        "No matching note chunks were retrieved.".to_string()
+    } else {
+        chunks
+            .iter()
+            .map(|chunk| {
+                format!(
+                    "{} | {} | {} | {}\n{}",
+                    chunk.citation_id,
+                    chunk.note_title,
+                    chunk.relative_path,
+                    chunk.heading_path,
+                    chunk.text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n---\n")
+    };
+    let scope_label = match scope {
+        ChatScope::Course => "current course",
+        ChatScope::Vault => "whole vault",
+    };
+
+    let payload = json!({
+        "model": settings.model,
+        "temperature": 0.2,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You answer from study notes first. Return strict JSON only with keys `answer`, `citationIds`, `usedFallback`, and `fallbackReason`."
+            },
+            {
+                "role": "user",
+                "content": format!(
+                    "Answer the user's question using the retrieved notes first. Scope: {scope_label}. Course: {}. \
+                     {} \
+                     Cite retrieved chunks by their `citationId` values in `citationIds` whenever notes support the answer.",
+                    course_name.unwrap_or("vault-wide"),
+                    if allow_fallback {
+                        "If the retrieved notes are insufficient, you may still answer with a clearly labeled fallback by setting `usedFallback` to true and explaining why in `fallbackReason`."
+                    } else {
+                        "Do not use fallback knowledge. Stay within the retrieved notes."
+                    }
+                )
+            },
+            { "role": "user", "content": format!("Recent conversation:\n{transcript_payload}") },
+            { "role": "user", "content": format!("Retrieved note chunks:\n{chunk_payload}") },
+            { "role": "user", "content": format!("Current user message: {user_message}") }
+        ]
+    });
+
+    let json = send_chat_request(settings, payload)?;
+    let content = message_content(&json)?;
+    let mut answer: ChatAnswerPayload = parse_json_blob(&content)?;
+    validate_chat_answer(chunks, &mut answer);
+    Ok(answer)
+}
+
 fn ensure_required(settings: &AiProviderSettings) -> Result<()> {
     if settings.base_url.trim().is_empty() {
         return Err(anyhow!("base URL is required"));
@@ -404,7 +595,9 @@ fn send_chat_request(settings: &AiProviderSettings, payload: Value) -> Result<Va
     let body_bytes = response
         .bytes()
         .map_err(|error| anyhow!("failed to read provider response: {error}"))?;
-    let body = String::from_utf8_lossy(body_bytes.as_ref()).trim().to_string();
+    let body = String::from_utf8_lossy(body_bytes.as_ref())
+        .trim()
+        .to_string();
     if !status.is_success() {
         return Err(anyhow!("provider rejected request ({status}): {body}"));
     }
@@ -574,10 +767,14 @@ fn validate_generated_exam(
             return Err(anyhow!("AI generated an empty exam question prompt"));
         }
         if question.correct_answer.trim().is_empty() {
-            return Err(anyhow!("AI generated an exam question without an answer key"));
+            return Err(anyhow!(
+                "AI generated an exam question without an answer key"
+            ));
         }
         if question.explanation.trim().is_empty() {
-            return Err(anyhow!("AI generated an exam question without an explanation"));
+            return Err(anyhow!(
+                "AI generated an exam question without an explanation"
+            ));
         }
 
         match question.question_type {
@@ -674,7 +871,10 @@ fn build_mock_exam(
         return Err(anyhow!("exam source queue is empty"));
     }
 
-    let note_titles = notes.iter().map(|note| note.title.as_str()).collect::<Vec<_>>();
+    let note_titles = notes
+        .iter()
+        .map(|note| note.title.as_str())
+        .collect::<Vec<_>>();
     let mut questions = Vec::new();
 
     for index in 0..input.multiple_choice_count {
@@ -685,11 +885,13 @@ fn build_mock_exam(
             .cloned()
             .unwrap_or_else(|| note.title.clone());
         let correct_answer = format!("{concept} anchors the note {}.", note.title);
-        let first_alt = note
-            .links
-            .first()
-            .cloned()
-            .unwrap_or_else(|| note_titles.first().copied().unwrap_or("the course graph").to_string());
+        let first_alt = note.links.first().cloned().unwrap_or_else(|| {
+            note_titles
+                .first()
+                .copied()
+                .unwrap_or("the course graph")
+                .to_string()
+        });
         let second_alt = note
             .headings
             .first()
@@ -712,7 +914,10 @@ fn build_mock_exam(
                 correct_answer.clone(),
                 format!("{concept} is disconnected from {first_alt}."),
                 format!("{concept} is only a formatting label from {second_alt}."),
-                format!("{concept} belongs to {third_alt} instead of {}.", note.title),
+                format!(
+                    "{concept} belongs to {third_alt} instead of {}.",
+                    note.title
+                ),
             ],
             correct_answer,
             explanation: format!(
@@ -732,7 +937,10 @@ fn build_mock_exam(
             .cloned()
             .unwrap_or_else(|| note.title.clone());
         let expected_answer = if note.excerpt.trim().is_empty() {
-            format!("{concept} should be explained with the main idea from {}.", note.title)
+            format!(
+                "{concept} should be explained with the main idea from {}.",
+                note.title
+            )
         } else {
             note.excerpt.clone()
         };
@@ -824,7 +1032,9 @@ fn build_mock_grading(
 fn mock_verdict(question: &ExamGradingQuestionInput) -> ExamVerdict {
     match question.question_type {
         ExamQuestionType::MultipleChoice => {
-            if normalize_answer_value(&question.user_answer) == normalize_text(&question.expected_answer) {
+            if normalize_answer_value(&question.user_answer)
+                == normalize_text(&question.expected_answer)
+            {
                 ExamVerdict::Correct
             } else {
                 ExamVerdict::Incorrect
@@ -877,11 +1087,180 @@ fn normalize_text(value: &str) -> String {
     value
         .to_lowercase()
         .chars()
-        .map(|ch| if ch.is_alphanumeric() || ch.is_whitespace() { ch } else { ' ' })
+        .map(|ch| {
+            if ch.is_alphanumeric() || ch.is_whitespace() {
+                ch
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn validate_chat_answer(chunks: &[ChatContextChunkInput], answer: &mut ChatAnswerPayload) {
+    let valid_ids = chunks
+        .iter()
+        .map(|chunk| chunk.citation_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    answer
+        .citation_ids
+        .retain(|citation_id| valid_ids.contains(citation_id.as_str()));
+
+    if !chunks.is_empty() && answer.citation_ids.is_empty() && !answer.used_fallback {
+        answer.citation_ids.push(chunks[0].citation_id.clone());
+    }
+
+    if chunks.is_empty() && !answer.used_fallback {
+        answer.used_fallback = true;
+        if answer.fallback_reason.is_none() {
+            answer.fallback_reason =
+                Some("No relevant note chunks were available for grounding.".to_string());
+        }
+    }
+}
+
+fn validate_formula_brief(brief: &FormulaBriefPayload) -> Result<()> {
+    if brief.coach.meaning.trim().is_empty() {
+        return Err(anyhow!("formula brief omitted coach meaning"));
+    }
+    if brief.coach.symbol_breakdown.is_empty() {
+        return Err(anyhow!("formula brief omitted symbol breakdown"));
+    }
+    if brief.practice.recall_prompts.is_empty() {
+        return Err(anyhow!("formula brief omitted recall prompts"));
+    }
+    if brief.derivation.intuition.trim().is_empty() {
+        return Err(anyhow!("formula brief omitted derivation intuition"));
+    }
+    Ok(())
+}
+
+fn build_mock_formula_brief(
+    course_name: &str,
+    latex: &str,
+    related_concepts: &[String],
+    headings: &[String],
+    chunks: &[ChatContextChunkInput],
+) -> FormulaBriefPayload {
+    let anchor_heading = headings
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "Core idea".to_string());
+    let anchor_chunk = chunks
+        .first()
+        .map(|chunk| chunk.text.clone())
+        .unwrap_or_else(|| format!("{latex} appears in the scanned notes for {course_name}."));
+
+    FormulaBriefPayload {
+        coach: FormulaCoach {
+            meaning: format!("{latex} is a recurring formula in {course_name}. {anchor_chunk}"),
+            symbol_breakdown: if related_concepts.is_empty() {
+                vec![format!("Start from the notation used around {latex}.")]
+            } else {
+                related_concepts
+                    .iter()
+                    .take(4)
+                    .map(|concept| format!("Relate the symbols back to {concept}."))
+                    .collect()
+            },
+            use_cases: vec![
+                format!("Use it when solving exercises from {anchor_heading}."),
+                "Say when the formula applies before substituting values.".to_string(),
+            ],
+            pitfalls: vec![
+                "Do not memorize the symbols without the assumptions.".to_string(),
+                "Check which terms stay fixed and which vary in the derivation.".to_string(),
+            ],
+        },
+        practice: FormulaPractice {
+            recall_prompts: vec![
+                format!("State {latex} from memory."),
+                "Explain each symbol without looking at the note.".to_string(),
+            ],
+            short_answer_drills: vec![
+                format!("When is {latex} the right tool?"),
+                format!("Which assumption breaks {latex}?"),
+            ],
+            multiple_choice_checks: vec![
+                format!("Pick the condition under which {latex} remains valid."),
+                "Choose the interpretation that matches the note context.".to_string(),
+            ],
+        },
+        derivation: FormulaDerivation {
+            assumptions: vec![
+                format!("Match the assumptions listed near {anchor_heading}."),
+                "Keep track of what the source note treats as given.".to_string(),
+            ],
+            intuition: format!(
+                "The derivation should connect {latex} back to the local note context rather than presenting it as an isolated identity."
+            ),
+            outline: vec![
+                "Start from the note definition.".to_string(),
+                "Transform the expression step by step.".to_string(),
+                "State the final result and when it is useful.".to_string(),
+            ],
+        },
+    }
+}
+
+fn build_mock_chat_answer(
+    scope: ChatScope,
+    course_name: Option<&str>,
+    user_message: &str,
+    chunks: &[ChatContextChunkInput],
+    allow_fallback: bool,
+) -> ChatAnswerPayload {
+    if chunks.is_empty() {
+        return ChatAnswerPayload {
+            answer: format!(
+                "I could not ground this in the {} notes, so this is a general fallback: start by checking the definitions and worked examples most related to “{}”.",
+                match scope {
+                    ChatScope::Course => "current course",
+                    ChatScope::Vault => "vault",
+                },
+                user_message
+            ),
+            citation_ids: Vec::new(),
+            used_fallback: allow_fallback,
+            fallback_reason: Some(
+                "No relevant note chunks were retrieved from the indexed notes.".to_string(),
+            ),
+        };
+    }
+
+    let labels = chunks
+        .iter()
+        .take(2)
+        .map(|chunk| format!("{} ({})", chunk.note_title, chunk.heading_path))
+        .collect::<Vec<_>>()
+        .join(" and ");
+    ChatAnswerPayload {
+        answer: format!(
+            "From the {} notes{}, the strongest support comes from {}. Those notes suggest focusing on the exact definition first, then the linked example pattern before extending the idea.",
+            match scope {
+                ChatScope::Course => "current course",
+                ChatScope::Vault => "vault",
+            },
+            course_name
+                .map(|name| format!(" for {name}"))
+                .unwrap_or_default(),
+            labels
+        ),
+        citation_ids: chunks
+            .iter()
+            .take(2)
+            .map(|chunk| chunk.citation_id.clone())
+            .collect(),
+        used_fallback: allow_fallback && chunks.len() == 1,
+        fallback_reason: if allow_fallback && chunks.len() == 1 {
+            Some("Only one strongly relevant note chunk was retrieved.".to_string())
+        } else {
+            None
+        },
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -892,12 +1271,13 @@ struct FlashcardEnvelope {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_json_object, generate_exam, grade_exam_attempt, message_content, parse_json_blob,
-        AiProviderSettings, ExamGenerationNoteInput, ExamGradingQuestionInput,
+        answer_chat_query, extract_json_object, generate_exam, generate_formula_brief,
+        grade_exam_attempt, message_content, parse_json_blob, AiProviderSettings,
+        ChatContextChunkInput, ExamGenerationNoteInput, ExamGradingQuestionInput,
     };
     use crate::models::{
-        ExamAnswerValue, ExamBuilderInput, ExamDifficulty, ExamPreset, ExamQuestionType,
-        ExamVerdict,
+        ChatMessageRole, ChatScope, ExamAnswerValue, ExamBuilderInput, ExamDifficulty, ExamPreset,
+        ExamQuestionType, ExamVerdict,
     };
     use serde::Deserialize;
     use serde_json::json;
@@ -1030,5 +1410,60 @@ mod tests {
 
         assert_eq!(grading.results.len(), 1);
         assert_eq!(grading.results[0].verdict, ExamVerdict::Partial);
+    }
+
+    #[test]
+    fn mock_formula_brief_includes_sections() {
+        let settings = AiProviderSettings {
+            base_url: "mock://formula".to_string(),
+            model: "mock-model".to_string(),
+            api_key: String::new(),
+            enabled: true,
+            timeout_ms: 2_000,
+        };
+        let brief = generate_formula_brief(
+            &settings,
+            "Math",
+            "\\lim_{x\\to a} f(x)",
+            &["Limits".to_string(), "Continuity".to_string()],
+            &["Definition".to_string()],
+            &[ChatContextChunkInput {
+                citation_id: "C1".to_string(),
+                note_id: "note-1".to_string(),
+                note_title: "Limits".to_string(),
+                relative_path: "limits.md".to_string(),
+                heading_path: "Definition".to_string(),
+                text: "Limits describe how a function behaves near a point.".to_string(),
+            }],
+        )
+        .expect("brief");
+
+        assert!(!brief.coach.meaning.is_empty());
+        assert!(!brief.practice.recall_prompts.is_empty());
+        assert!(!brief.derivation.outline.is_empty());
+    }
+
+    #[test]
+    fn mock_chat_answer_flags_fallback_without_chunks() {
+        let settings = AiProviderSettings {
+            base_url: "mock://chat".to_string(),
+            model: "mock-model".to_string(),
+            api_key: String::new(),
+            enabled: true,
+            timeout_ms: 2_000,
+        };
+        let answer = answer_chat_query(
+            &settings,
+            ChatScope::Course,
+            Some("Math"),
+            &[(ChatMessageRole::User, "What is a limit?".to_string())],
+            "What is a limit?",
+            &[],
+            true,
+        )
+        .expect("answer");
+
+        assert!(answer.used_fallback);
+        assert!(answer.citation_ids.is_empty());
     }
 }

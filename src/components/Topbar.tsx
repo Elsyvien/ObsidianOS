@@ -1,5 +1,5 @@
 import { formatDateTime } from "../lib";
-import type { AiCourseSummary, CourseConfig, DashboardData, ScanStatus } from "../types";
+import type { AiCourseSummary, ChatScope, CourseConfig, DashboardData, ScanStatus } from "../types";
 import type { AppView } from "./appShell";
 import { BrandMark } from "./BrandMark";
 
@@ -7,6 +7,7 @@ type TopbarProps = {
   activeView: AppView;
   aiStatus: AiCourseSummary | null;
   busyAction: string | null;
+  chatScope: ChatScope;
   dashboard: DashboardData | null;
   runtimeMode: "tauri" | "browser-preview";
   scanStatus: ScanStatus | null;
@@ -21,6 +22,7 @@ export function Topbar({
   activeView,
   aiStatus,
   busyAction,
+  chatScope,
   dashboard,
   runtimeMode,
   scanStatus,
@@ -32,22 +34,28 @@ export function Topbar({
 }: TopbarProps) {
   const isPreview = runtimeMode === "browser-preview";
   const canScan = isPreview || selectedCourse !== null;
-  const headline =
-    activeView === "overview"
-      ? selectedCourse?.name ?? "Exam workspace"
-      : activeView === "ai"
-        ? selectedCourse
-          ? `${selectedCourse.name} AI workspace`
-          : "AI workspace"
-        : activeView === "exams"
+  const headline = (() => {
+    switch (activeView) {
+      case "overview":
+        return selectedCourse?.name ?? "Study workspace";
+      case "notes":
+        return selectedCourse ? `${selectedCourse.name} notes` : "Notes";
+      case "formulas":
+        return selectedCourse ? `${selectedCourse.name} formula library` : "Formulas";
+      case "ai":
+        return selectedCourse ? `${selectedCourse.name} AI workspace` : "AI workspace";
+      case "exams":
+        return selectedCourse ? `${selectedCourse.name} exam engine` : "Exams";
+      case "chat":
+        return chatScope === "course"
           ? selectedCourse
-            ? `${selectedCourse.name} exam engine`
-            : "Exams"
-        : activeView === "notes"
-          ? selectedCourse
-            ? `${selectedCourse.name} notes`
-            : "Notes"
-        : title;
+            ? `${selectedCourse.name} grounded chat`
+            : "Course chat"
+          : "Vault chat";
+      default:
+        return title;
+    }
+  })();
   const statusItems = [
     isPreview ? "Preview" : "Desktop",
     selectedCourse ? dashboard?.countdown.label ?? "Course selected" : "No course selected",
@@ -89,7 +97,7 @@ export function Topbar({
             </button>
           ) : null}
           <button className="button button--subtle" disabled={!canScan || busyAction !== null} onClick={onScan} type="button">
-            {busyAction === "Scan failed" ? "Scanning..." : "Scan course"}
+            {busyAction === "Scan failed" ? "Scanning..." : "Scan vault"}
           </button>
           <button className="button button--ghost" disabled={busyAction !== null} onClick={onRefresh} type="button">
             Refresh

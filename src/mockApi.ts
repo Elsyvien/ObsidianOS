@@ -3,8 +3,14 @@ import type {
   AiCourseSummary,
   AiNoteInsight,
   AiSettingsInput,
+  ChatCitation,
+  ChatMessage,
+  ChatScope,
+  ChatThreadDetails,
+  ChatThreadSummary,
   CourseConfig,
   CourseConfigInput,
+  CreateChatThreadRequest,
   DashboardData,
   ExamAttemptResult,
   ExamAttemptSummary,
@@ -20,12 +26,20 @@ import type {
   ExamWorkspaceSnapshot,
   FlashcardGenerationRequest,
   FlashcardGenerationResult,
+  FormulaBrief,
+  FormulaDetails,
+  FormulaLinkedNote,
+  FormulaSummary,
+  FormulaWorkspaceSnapshot,
+  GenerateFormulaBriefRequest,
+  NoteChunkPreview,
   NoteMasteryState,
   NoteDetails,
   NoteSummary,
   RevisionNoteRequest,
   RevisionNoteResult,
   ScanReport,
+  SendChatMessageRequest,
   ValidationResult,
   WorkspaceSnapshot,
 } from "./types";
@@ -39,6 +53,8 @@ type MockState = {
   examsByCourse: Record<string, MockExamRecord[]>;
   noteMastery: Record<string, NoteMasteryState>;
   noteAccuracy: Record<string, number | null>;
+  formulaBriefs: Record<string, FormulaBrief>;
+  chatThreads: MockChatThread[];
 };
 
 type MockExamRecord = ExamDetails & {
@@ -63,6 +79,8 @@ type DemoBlueprint = {
   topConcepts: DashboardData["topConcepts"];
 };
 
+type MockChatThread = ChatThreadDetails;
+
 const PREVIEW_VAULT_PATH = "Preview\\Sample Workspace";
 const now = () => new Date().toISOString();
 
@@ -82,6 +100,8 @@ const state: MockState = {
   examsByCourse: {},
   noteMastery: {},
   noteAccuracy: {},
+  formulaBriefs: {},
+  chatThreads: [],
 };
 
 const EXAM_PRESET_DEFAULTS: Record<ExamDefaults["preset"], Omit<ExamDefaults, "preset">> = {
@@ -143,6 +163,8 @@ export async function disconnectVaultMock() {
   state.examsByCourse = {};
   state.noteMastery = {};
   state.noteAccuracy = {};
+  state.formulaBriefs = {};
+  state.chatThreads = [];
   return clone(state.workspace);
 }
 
@@ -200,6 +222,10 @@ export async function deleteCourseMock(courseId: string) {
   delete state.revisionRuns[courseId];
   delete state.examSourceQueue[courseId];
   delete state.examsByCourse[courseId];
+  state.chatThreads = state.chatThreads.filter((thread) => thread.courseId !== courseId);
+  state.formulaBriefs = Object.fromEntries(
+    Object.entries(state.formulaBriefs).filter(([key]) => !key.startsWith(`${courseId}:`)),
+  );
   state.workspace.selectedCourseId = state.workspace.courses[0]?.id ?? null;
   state.workspace.dashboard = state.workspace.selectedCourseId
     ? buildDashboard(state.workspace.selectedCourseId)
@@ -599,6 +625,129 @@ export async function applyExamReviewActionsMock(request: ApplyExamReviewActions
   return clone(buildExamWorkspace(record.courseId));
 }
 
+export async function getFormulaWorkspaceMock(courseId: string | null) {
+  ensureDemoWorkspace();
+  const selectedCourseId = courseId ?? state.workspace.selectedCourseId ?? state.workspace.courses[0]?.id ?? null;
+  if (!selectedCourseId) {
+    return null;
+  }
+
+  return clone(buildFormulaWorkspace(selectedCourseId));
+}
+
+export async function getFormulaDetailsMock(formulaId: string, courseId: string) {
+  ensureDemoWorkspace();
+  const details = buildFormulaDetails(courseId, formulaId);
+  if (!details) {
+    throw new Error("Formula not found.");
+  }
+
+  return clone(details);
+}
+
+export async function generateFormulaBriefMock(request: GenerateFormulaBriefRequest) {
+  ensureDemoWorkspace();
+  const details = buildFormulaDetails(request.courseId, request.formulaId);
+  if (!details) {
+    throw new Error("Formula not found.");
+  }
+
+  const brief = buildFormulaBrief(details);
+  state.formulaBriefs[formulaCacheKey(request.courseId, request.formulaId)] = brief;
+  return clone(brief);
+}
+
+export async function listChatThreadsMock(scope: ChatScope, courseId?: string | null) {
+  ensureDemoWorkspace();
+  return clone(
+    state.chatThreads
+      .filter((thread) => thread.scope === scope)
+      .filter((thread) => (scope === "course" ? thread.courseId === (courseId ?? null) : true))
+      .map((thread) => summarizeChatThread(thread))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+  );
+}
+
+export async function createChatThreadMock(request: CreateChatThreadRequest) {
+  ensureDemoWorkspace();
+  if (request.scope === "course" && !request.courseId) {
+    throw new Error("Choose a course before starting a course chat.");
+  }
+
+  const course = request.courseId
+    ? state.workspace.courses.find((entry) => entry.id === request.courseId) ?? null
+    : null;
+  const timestamp = now();
+  const thread: MockChatThread = {
+    id: `chat-${crypto.randomUUID()}`,
+    title:
+      request.title?.trim() ||
+      (request.scope === "course" ? `${course?.name ?? "Course"} chat` : "Vault chat"),
+    scope: request.scope,
+    courseId: request.scope === "course" ? request.courseId ?? null : null,
+    courseName: request.scope === "course" ? course?.name ?? null : null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    messages: [],
+  };
+
+  state.chatThreads.unshift(thread);
+  return clone(thread);
+}
+
+export async function getChatThreadMock(threadId: string) {
+  ensureDemoWorkspace();
+  const thread = state.chatThreads.find((entry) => entry.id === threadId);
+  if (!thread) {
+    throw new Error("Chat thread not found.");
+  }
+
+  return clone(thread);
+}
+
+export async function sendChatMessageMock(request: SendChatMessageRequest) {
+  ensureDemoWorkspace();
+  const thread = state.chatThreads.find((entry) => entry.id === request.threadId);
+  if (!thread) {
+    throw new Error("Chat thread not found.");
+  }
+  if (!state.workspace.aiSettings?.enabled) {
+    throw new Error("Enable AI in Setup before using grounded chat.");
+  }
+
+  const prompt = request.content.trim();
+  if (!prompt) {
+    throw new Error("Enter a question before sending.");
+  }
+
+  const userMessage: ChatMessage = {
+    id: `message-${crypto.randomUUID()}`,
+    threadId: thread.id,
+    role: "user",
+    content: prompt,
+    createdAt: now(),
+    citations: [],
+    usedFallback: false,
+    fallbackReason: null,
+  };
+
+  thread.messages.push(userMessage);
+  if (thread.messages.filter((message) => message.role === "user").length === 1) {
+    thread.title = buildChatThreadTitle(prompt);
+  }
+
+  const assistantMessage = buildChatAssistantMessage(thread, prompt);
+  thread.messages.push(assistantMessage);
+  thread.updatedAt = assistantMessage.createdAt;
+
+  return clone(thread);
+}
+
+export async function deleteChatThreadMock(threadId: string) {
+  ensureDemoWorkspace();
+  state.chatThreads = state.chatThreads.filter((thread) => thread.id !== threadId);
+}
+
 function buildDashboard(courseId: string): DashboardData {
   const course = state.workspace.courses.find((entry) => entry.id === courseId);
   if (!course) {
@@ -662,6 +811,299 @@ function buildDashboard(courseId: string): DashboardData {
     exams: buildExamWorkspace(courseId).summary,
     notes: noteSummaries,
   };
+}
+
+function buildFormulaWorkspace(courseId: string): FormulaWorkspaceSnapshot {
+  const formulas = listCourseFormulaSummaries(courseId);
+  const notes = state.notesByCourse[courseId] ?? [];
+  const notesWithFormulas = notes.filter((note) => note.formulas.length > 0).length;
+  const briefedCount = formulas.filter((formula) => state.formulaBriefs[formulaCacheKey(courseId, formula.id)]).length;
+
+  return {
+    courseId,
+    courseName: state.workspace.courses.find((course) => course.id === courseId)?.name ?? "Course",
+    generatedAt: now(),
+    formulas,
+    summary: {
+      formulaCount: formulas.length,
+      formulaMentions: notes.reduce((sum, note) => sum + note.formulas.length, 0),
+      notesWithFormulas,
+      briefedCount,
+    },
+  };
+}
+
+function listCourseFormulaSummaries(courseId: string): FormulaSummary[] {
+  const formulas = new Map<
+    string,
+    {
+      latex: string;
+      sourceNoteIds: Set<string>;
+      sourceNoteTitles: Set<string>;
+    }
+  >();
+
+  for (const note of state.notesByCourse[courseId] ?? []) {
+    for (const formula of note.formulas) {
+      const normalizedLatex = normalizeFormula(formula);
+      const entry = formulas.get(normalizedLatex) ?? {
+        latex: formula,
+        sourceNoteIds: new Set<string>(),
+        sourceNoteTitles: new Set<string>(),
+      };
+      entry.sourceNoteIds.add(note.id);
+      entry.sourceNoteTitles.add(note.title);
+      formulas.set(normalizedLatex, entry);
+    }
+  }
+
+  return Array.from(formulas.entries())
+    .map(([normalizedLatex, entry]) => ({
+      id: buildFormulaId(courseId, normalizedLatex),
+      latex: entry.latex,
+      normalizedLatex,
+      noteCount: entry.sourceNoteIds.size,
+      sourceNoteIds: Array.from(entry.sourceNoteIds),
+      sourceNoteTitles: Array.from(entry.sourceNoteTitles),
+    }))
+    .sort((left, right) => right.noteCount - left.noteCount || left.latex.localeCompare(right.latex));
+}
+
+function buildFormulaDetails(courseId: string, formulaId: string): FormulaDetails | null {
+  const formulaSummary = listCourseFormulaSummaries(courseId).find((formula) => formula.id === formulaId);
+  if (!formulaSummary) {
+    return null;
+  }
+
+  const normalizedTarget = formulaSummary.normalizedLatex;
+  const matchingNotes = (state.notesByCourse[courseId] ?? []).filter((note) =>
+    note.formulas.some((formula) => normalizeFormula(formula) === normalizedTarget),
+  );
+  const linkedNotes: FormulaLinkedNote[] = matchingNotes.map((note) => ({
+    noteId: note.id,
+    title: note.title,
+    relativePath: note.relativePath,
+    excerpt: note.excerpt,
+    headings: note.headings.slice(0, 3),
+    relatedConcepts: note.concepts.slice(0, 4),
+    formulaCount: note.formulas.length,
+  }));
+  const chunks: NoteChunkPreview[] = matchingNotes.flatMap((note, noteIndex) =>
+    buildFormulaChunks(note, formulaSummary.latex, noteIndex),
+  );
+  const relatedConcepts = Array.from(
+    new Set(matchingNotes.flatMap((note) => note.concepts)),
+  ).slice(0, 8);
+  const headings = Array.from(
+    new Set(matchingNotes.flatMap((note) => note.headings)),
+  ).slice(0, 8);
+
+  return {
+    id: formulaSummary.id,
+    courseId,
+    latex: formulaSummary.latex,
+    normalizedLatex: normalizedTarget,
+    noteCount: formulaSummary.noteCount,
+    sourceNoteIds: formulaSummary.sourceNoteIds,
+    sourceNoteTitles: formulaSummary.sourceNoteTitles,
+    linkedNotes,
+    chunks,
+    relatedConcepts,
+    headings,
+    brief: state.formulaBriefs[formulaCacheKey(courseId, formulaId)] ?? null,
+  };
+}
+
+function buildFormulaChunks(note: NoteDetails, latex: string, noteIndex: number): NoteChunkPreview[] {
+  const fragments = [
+    note.excerpt,
+    ...note.headings.map((heading) => `${heading}: ${note.excerpt}`),
+  ].filter(Boolean);
+
+  return fragments.slice(0, 3).map((text, index) => ({
+    chunkId: `chunk-${note.id}-${noteIndex}-${index}`,
+    noteId: note.id,
+    noteTitle: note.title,
+    relativePath: note.relativePath,
+    headingPath: note.headings[index] ?? note.headings[0] ?? "Overview",
+    text: text.includes(latex) ? text : `${text} Key formula: ${latex}.`,
+    ordinal: index,
+  }));
+}
+
+function buildFormulaBrief(details: FormulaDetails): FormulaBrief {
+  const [leftSide, rightSide] = details.latex.split("=").map((part) => part.trim());
+  const sourceSignature = `${details.normalizedLatex}:${details.sourceNoteIds.join("|")}:${details.chunks.length}`;
+
+  return {
+    formulaId: details.id,
+    coach: {
+      meaning: `${details.latex} shows up across ${details.noteCount} note${details.noteCount === 1 ? "" : "s"} in this course and anchors ${details.relatedConcepts.slice(0, 3).join(", ") || "the surrounding topic"}.`,
+      symbolBreakdown: [
+        leftSide ? `Left side: ${leftSide}` : "Left side not explicitly separated in the stored formula.",
+        rightSide ? `Right side: ${rightSide}` : "Use the linked note excerpts to unpack the right-hand side.",
+        `Primary note anchors: ${details.sourceNoteTitles.slice(0, 3).join(", ")}`,
+      ],
+      useCases: details.linkedNotes.slice(0, 3).map((note) => `Use it in ${note.title} when the task asks for the core relation, setup, or transformation.`),
+      pitfalls: [
+        "Do not memorize the formula without its assumptions.",
+        "Check which symbols are fixed inputs versus derived outputs.",
+        "Pair the formula with one concrete worked example from the linked notes.",
+      ],
+    },
+    practice: {
+      recallPrompts: [
+        `State ${details.latex} from memory and explain each symbol.`,
+        `Name the note where ${details.latex} first becomes important.`,
+        `Say when you would apply ${details.latex} in an exam setting.`,
+      ],
+      shortAnswerDrills: details.relatedConcepts.slice(0, 3).map((concept) => `Explain how ${details.latex} supports ${concept}.`),
+      multipleChoiceChecks: [
+        `Which assumption matters most before using ${details.latex}?`,
+        `Which term in ${details.latex} changes when the system setup changes?`,
+      ],
+    },
+    derivation: {
+      intuition: `Treat ${details.latex} as a compressed summary of the logic spread across ${details.sourceNoteTitles.slice(0, 2).join(" and ") || "the linked notes"}.`,
+      assumptions: details.headings.slice(0, 4).map((heading) => `Recheck the ${heading} section before deriving or using the formula.`),
+      outline: [
+        "Start from the definition used in the linked note.",
+        "Rewrite the relationship step by step until the target expression appears.",
+        "Validate the result against one of the stored examples or excerpts.",
+      ],
+    },
+    generatedAt: now(),
+    model: "preview-demo",
+    sourceSignature,
+  };
+}
+
+function summarizeChatThread(thread: MockChatThread): ChatThreadSummary {
+  const lastMessage = thread.messages[thread.messages.length - 1];
+  return {
+    id: thread.id,
+    title: thread.title,
+    scope: thread.scope,
+    courseId: thread.courseId,
+    courseName: thread.courseName,
+    createdAt: thread.createdAt,
+    updatedAt: thread.updatedAt,
+    messageCount: thread.messages.length,
+    lastMessagePreview: lastMessage?.content.slice(0, 120) ?? "No messages yet",
+  };
+}
+
+function buildChatAssistantMessage(thread: MockChatThread, prompt: string): ChatMessage {
+  const retrieval = retrieveChatSupport(thread.scope, thread.courseId, prompt);
+  const citations = retrieval.sources.map(
+    (source, index): ChatCitation => ({
+      chunkId: `chunk-${thread.id}-${index}`,
+      noteId: source.note.id,
+      noteTitle: source.note.title,
+      relativePath: source.note.relativePath,
+      headingPath: source.headingPath,
+      excerpt: source.quote,
+      courseId: source.courseId,
+      courseName: source.courseName,
+      relevance: source.score,
+    }),
+  );
+
+  const groundedSection = citations.length
+    ? [
+        `From your ${thread.scope === "course" ? "course" : "vault"} notes, the strongest matches are ${citations
+          .map((citation) => citation.noteTitle)
+          .join(", ")}.`,
+        ...retrieval.sources.slice(0, 3).map(
+          (source) =>
+            `${source.note.title}: ${source.note.excerpt || source.quote}${source.note.formulas[0] ? ` Key formula: ${source.note.formulas[0]}.` : ""}`,
+        ),
+      ].join("\n\n")
+    : "I could not find a strong note-backed answer in the current scope.";
+  const usedFallback = retrieval.sources.length === 0 || retrieval.sources[0].score < 2;
+  const fallbackReason = usedFallback
+    ? "The vault did not contain enough high-confidence note support for a complete answer."
+    : null;
+  const fallbackSection = usedFallback
+    ? "\n\nFallback:\nBased on general study patterns, start from the core definition, attach one example, and then connect it back to the most relevant note."
+    : "";
+
+  return {
+    id: `message-${crypto.randomUUID()}`,
+    threadId: thread.id,
+    role: "assistant",
+    content: `${groundedSection}${fallbackSection}`,
+    createdAt: now(),
+    citations,
+    usedFallback,
+    fallbackReason,
+  };
+}
+
+function retrieveChatSupport(scope: ChatScope, courseId: string | null, prompt: string) {
+  const tokens = tokenize(prompt);
+  const notes =
+    scope === "course" && courseId
+      ? state.notesByCourse[courseId] ?? []
+      : Object.values(state.notesByCourse).flat();
+  const sources = notes
+    .map((note) => {
+      const searchable = [
+        note.title,
+        note.excerpt,
+        note.headings.join(" "),
+        note.concepts.join(" "),
+        note.formulas.join(" "),
+        note.links.join(" "),
+      ].join(" ");
+      const normalizedSearchable = normalizeFormula(searchable);
+      const score = tokens.reduce((sum, token) => sum + (normalizedSearchable.includes(token) ? 1 : 0), 0);
+      return {
+        note,
+        courseId: Object.entries(state.notesByCourse).find(([, notes]) => notes.some((entry) => entry.id === note.id))?.[0] ?? "",
+        courseName:
+          state.workspace.courses.find((course) =>
+            (state.notesByCourse[course.id] ?? []).some((entry) => entry.id === note.id),
+          )?.name ?? "Course",
+        score:
+          score +
+          (note.formulas.some((formula) => normalizeFormula(prompt).includes(normalizeFormula(formula))) ? 2 : 0) +
+          (normalizeFormula(note.title).includes(normalizeFormula(prompt)) ? 2 : 0),
+        quote: note.excerpt,
+        headingPath: note.headings[0] ?? "Overview",
+      };
+    })
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.note.title.localeCompare(right.note.title))
+    .slice(0, 3);
+
+  return { sources };
+}
+
+function buildChatThreadTitle(prompt: string) {
+  const compact = prompt.trim().replace(/\s+/g, " ");
+  const words = compact.split(" ").slice(0, 6).join(" ");
+  return words.length < compact.length ? `${words}...` : words || "New chat";
+}
+
+function buildFormulaId(courseId: string, normalizedLatex: string) {
+  return `formula-${courseId}-${normalizedLatex}`;
+}
+
+function formulaCacheKey(courseId: string, formulaId: string) {
+  return `${courseId}:${formulaId}`;
+}
+
+function normalizeFormula(value: string) {
+  return value.toLowerCase().replace(/\s+/g, "").replace(/[^\w\\]/g, "");
+}
+
+function tokenize(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\\]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 3);
 }
 
 function buildAiSummary(notes: NoteDetails[]): AiCourseSummary {

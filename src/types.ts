@@ -61,6 +61,161 @@ export type FormulaMetric = {
   noteCount: number;
 };
 
+export type FormulaSummary = {
+  id: string;
+  latex: string;
+  normalizedLatex: string;
+  noteCount: number;
+  sourceNoteIds: string[];
+  sourceNoteTitles: string[];
+};
+
+export type FormulaWorkspaceSummary = {
+  formulaCount: number;
+  notesWithFormulas: number;
+  formulaMentions: number;
+  briefedCount: number;
+};
+
+export type FormulaWorkspaceSnapshot = {
+  courseId: string;
+  courseName: string;
+  generatedAt: string;
+  formulas: FormulaSummary[];
+  summary: FormulaWorkspaceSummary;
+};
+
+export type FormulaLinkedNote = {
+  noteId: string;
+  title: string;
+  relativePath: string;
+  excerpt: string;
+  headings: string[];
+  relatedConcepts: string[];
+  formulaCount: number;
+};
+
+export type NoteChunkPreview = {
+  chunkId: string;
+  noteId: string;
+  noteTitle: string;
+  relativePath: string;
+  headingPath: string;
+  text: string;
+  ordinal: number;
+};
+
+export type FormulaCoach = {
+  meaning: string;
+  symbolBreakdown: string[];
+  useCases: string[];
+  pitfalls: string[];
+};
+
+export type FormulaPractice = {
+  recallPrompts: string[];
+  shortAnswerDrills: string[];
+  multipleChoiceChecks: string[];
+};
+
+export type FormulaDerivation = {
+  assumptions: string[];
+  intuition: string;
+  outline: string[];
+};
+
+export type FormulaBrief = {
+  formulaId: string;
+  coach: FormulaCoach;
+  practice: FormulaPractice;
+  derivation: FormulaDerivation;
+  generatedAt: string;
+  model: string;
+  sourceSignature: string;
+};
+
+export type FormulaDetails = {
+  courseId: string;
+  id: string;
+  latex: string;
+  normalizedLatex: string;
+  noteCount: number;
+  sourceNoteIds: string[];
+  sourceNoteTitles: string[];
+  linkedNotes: FormulaLinkedNote[];
+  chunks: NoteChunkPreview[];
+  relatedConcepts: string[];
+  headings: string[];
+  brief: FormulaBrief | null;
+};
+
+export type GenerateFormulaBriefRequest = {
+  courseId: string;
+  formulaId: string;
+  force?: boolean | null;
+};
+
+export type ChatScope = "course" | "vault";
+
+export type ChatMessageRole = "user" | "assistant";
+
+export type ChatCitation = {
+  chunkId: string;
+  noteId: string;
+  noteTitle: string;
+  relativePath: string;
+  headingPath: string;
+  excerpt: string;
+  courseId: string;
+  courseName: string;
+  relevance: number;
+};
+
+export type ChatMessage = {
+  id: string;
+  threadId: string;
+  role: ChatMessageRole;
+  content: string;
+  createdAt: string;
+  citations: ChatCitation[];
+  usedFallback: boolean;
+  fallbackReason: string | null;
+};
+
+export type ChatThreadSummary = {
+  id: string;
+  scope: ChatScope;
+  courseId: string | null;
+  courseName: string | null;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+  lastMessagePreview: string | null;
+};
+
+export type ChatThreadDetails = {
+  id: string;
+  scope: ChatScope;
+  courseId: string | null;
+  courseName: string | null;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: ChatMessage[];
+};
+
+export type CreateChatThreadRequest = {
+  scope: ChatScope;
+  courseId?: string | null;
+  title?: string | null;
+};
+
+export type SendChatMessageRequest = {
+  threadId: string;
+  content: string;
+};
+
 export type FlashcardSummary = {
   setCount: number;
   totalCards: number;

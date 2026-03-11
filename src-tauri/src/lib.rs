@@ -10,11 +10,13 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result};
 use db::Database;
 use models::{
-    AiCourseSummary, AiNoteInsight, AiSettingsInput, ApplyExamReviewActionsRequest,
-    CourseConfigInput, DashboardData, ExamAttemptResult, ExamDetails, ExamBuilderInput,
-    ExamSubmissionRequest, ExamWorkspaceSnapshot, FlashcardGenerationRequest,
-    FlashcardGenerationResult, NoteDetails, RevisionNoteRequest, RevisionNoteResult, ScanReport,
-    ValidationResult, WorkspaceSnapshot,
+    AiCourseSummary, AiNoteInsight, AiSettingsInput, ApplyExamReviewActionsRequest, ChatScope,
+    ChatThreadDetails, ChatThreadSummary, CourseConfigInput, CreateChatThreadRequest,
+    DashboardData, ExamAttemptResult, ExamBuilderInput, ExamDetails, ExamSubmissionRequest,
+    ExamWorkspaceSnapshot, FlashcardGenerationRequest, FlashcardGenerationResult, FormulaBrief,
+    FormulaDetails, FormulaWorkspaceSnapshot, GenerateFormulaBriefRequest, NoteDetails,
+    RevisionNoteRequest, RevisionNoteResult, ScanReport, SendChatMessageRequest, ValidationResult,
+    WorkspaceSnapshot,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
@@ -270,7 +272,10 @@ async fn get_exam_workspace(
     })
     .await?;
 
-    if let Some(course_id) = workspace.as_ref().map(|snapshot| snapshot.course_id.clone()) {
+    if let Some(course_id) = workspace
+        .as_ref()
+        .map(|snapshot| snapshot.course_id.clone())
+    {
         let should_spawn = blocking({
             let state = state.clone();
             let course_id = course_id.clone();
@@ -385,6 +390,109 @@ async fn apply_exam_review_actions(
     blocking(move || {
         let database = Database::open(&state.db_path)?;
         database.apply_exam_review_actions(request)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_formula_workspace(
+    course_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Option<FormulaWorkspaceSnapshot>, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.get_formula_workspace(course_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_formula_details(
+    formula_id: String,
+    course_id: String,
+    state: State<'_, AppState>,
+) -> Result<FormulaDetails, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.get_formula_details(&formula_id, &course_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn generate_formula_brief(
+    request: GenerateFormulaBriefRequest,
+    state: State<'_, AppState>,
+) -> Result<FormulaBrief, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.generate_formula_brief(request)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_chat_threads(
+    scope: ChatScope,
+    course_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ChatThreadSummary>, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.list_chat_threads(scope, course_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn create_chat_thread(
+    request: CreateChatThreadRequest,
+    state: State<'_, AppState>,
+) -> Result<ChatThreadDetails, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.create_chat_thread(request)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_chat_thread(
+    thread_id: String,
+    state: State<'_, AppState>,
+) -> Result<ChatThreadDetails, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.get_chat_thread(&thread_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn send_chat_message(
+    request: SendChatMessageRequest,
+    state: State<'_, AppState>,
+) -> Result<ChatThreadDetails, String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.send_chat_message(request)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn delete_chat_thread(thread_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let state = state.inner().clone();
+    blocking(move || {
+        let database = Database::open(&state.db_path)?;
+        database.delete_chat_thread(&thread_id)
     })
     .await
 }
@@ -518,7 +626,15 @@ pub fn run() {
             queue_exams,
             get_exam_details,
             submit_exam_attempt,
-            apply_exam_review_actions
+            apply_exam_review_actions,
+            get_formula_workspace,
+            get_formula_details,
+            generate_formula_brief,
+            list_chat_threads,
+            create_chat_thread,
+            get_chat_thread,
+            send_chat_message,
+            delete_chat_thread
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -4,6 +4,9 @@ import type {
   AiCourseSummary,
   AiNoteInsight,
   AiSettingsInput,
+  ChatScope,
+  ChatThreadDetails,
+  ChatThreadSummary,
   CourseConfigInput,
   DashboardData,
   ExamAttemptResult,
@@ -13,25 +16,38 @@ import type {
   ExamWorkspaceSnapshot,
   FlashcardGenerationRequest,
   FlashcardGenerationResult,
+  FormulaBrief,
+  FormulaDetails,
+  FormulaWorkspaceSnapshot,
+  GenerateFormulaBriefRequest,
   NoteDetails,
   RevisionNoteRequest,
   RevisionNoteResult,
   ScanReport,
+  CreateChatThreadRequest,
+  SendChatMessageRequest,
   ValidationResult,
   WorkspaceSnapshot,
 } from "./types";
 import {
   addExamSourceNotesMock,
   applyExamReviewActionsMock,
+  createChatThreadMock,
   clearExamSourceQueueMock,
   connectVaultMock,
+  deleteChatThreadMock,
   deleteCourseMock,
   disconnectVaultMock,
   getExamDetailsMock,
   getExamWorkspaceMock,
+  getFormulaDetailsMock,
+  getFormulaWorkspaceMock,
+  getChatThreadMock,
   generateFlashcardsMock,
+  generateFormulaBriefMock,
   generateNoteAiInsightMock,
   generateRevisionNoteMock,
+  listChatThreadsMock,
   queueExamsMock,
   removeExamSourceNotesMock,
   getDashboardMock,
@@ -40,6 +56,7 @@ import {
   runScanMock,
   saveAiSettingsMock,
   saveCourseConfigMock,
+  sendChatMessageMock,
   startAiEnrichmentMock,
   submitExamAttemptMock,
   validateAiSettingsMock,
@@ -177,4 +194,44 @@ export function submitExamAttempt(request: ExamSubmissionRequest) {
 export function applyExamReviewActions(request: ApplyExamReviewActionsRequest) {
   if (!isTauriRuntime()) return applyExamReviewActionsMock(request);
   return invoke<ExamWorkspaceSnapshot>("apply_exam_review_actions", { request });
+}
+
+export function getFormulaWorkspace(courseId: string | null) {
+  if (!isTauriRuntime()) return getFormulaWorkspaceMock(courseId);
+  return invoke<FormulaWorkspaceSnapshot | null>("get_formula_workspace", { courseId });
+}
+
+export function getFormulaDetails(formulaId: string, courseId: string) {
+  if (!isTauriRuntime()) return getFormulaDetailsMock(formulaId, courseId);
+  return invoke<FormulaDetails>("get_formula_details", { formulaId, courseId });
+}
+
+export function generateFormulaBrief(request: GenerateFormulaBriefRequest) {
+  if (!isTauriRuntime()) return generateFormulaBriefMock(request);
+  return invoke<FormulaBrief>("generate_formula_brief", { request });
+}
+
+export function listChatThreads(scope: ChatScope, courseId?: string | null) {
+  if (!isTauriRuntime()) return listChatThreadsMock(scope, courseId);
+  return invoke<ChatThreadSummary[]>("list_chat_threads", { scope, courseId });
+}
+
+export function createChatThread(request: CreateChatThreadRequest) {
+  if (!isTauriRuntime()) return createChatThreadMock(request);
+  return invoke<ChatThreadDetails>("create_chat_thread", { request });
+}
+
+export function getChatThread(threadId: string) {
+  if (!isTauriRuntime()) return getChatThreadMock(threadId);
+  return invoke<ChatThreadDetails>("get_chat_thread", { threadId });
+}
+
+export function sendChatMessage(request: SendChatMessageRequest) {
+  if (!isTauriRuntime()) return sendChatMessageMock(request);
+  return invoke<ChatThreadDetails>("send_chat_message", { request });
+}
+
+export function deleteChatThread(threadId: string) {
+  if (!isTauriRuntime()) return deleteChatThreadMock(threadId);
+  return invoke<void>("delete_chat_thread", { threadId });
 }

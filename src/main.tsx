@@ -1,9 +1,19 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
+import { getRuntimeMode } from "./api";
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-);
+async function bootstrap() {
+  const runtimeMode = getRuntimeMode();
+  const RootComponent =
+    runtimeMode === "tauri"
+      ? (await import("./App")).default
+      : (await import("./landing/LandingPage")).LandingPage;
+
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      <RootComponent />
+    </React.StrictMode>,
+  );
+}
+
+void bootstrap();

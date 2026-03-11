@@ -4,9 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
+    "dev": "vite --mode pages",
+    "dev:desktop": "vite --mode tauri",
+    "build": "tsc && vite build --mode pages",
+    "build:desktop": "tsc && vite build --mode tauri",
+    "preview": "vite preview --mode pages",
     "tauri": "tauri",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build"

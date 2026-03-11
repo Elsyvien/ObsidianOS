@@ -1,5 +1,16 @@
 import type { ReactNode } from "react";
-import { ArrowDownToLine, BarChart2, BookOpen, BrainCircuit, ClipboardCheck, FolderGit2, Settings, TerminalSquare } from "lucide-react";
+import {
+  ArrowDownToLine,
+  BarChart2,
+  BookOpen,
+  BrainCircuit,
+  ClipboardCheck,
+  FolderGit2,
+  MessageSquareMore,
+  Settings,
+  Sigma,
+  TerminalSquare,
+} from "lucide-react";
 import { formatDate, shortenPath } from "../lib";
 import type { CourseConfig } from "../types";
 import { APP_VIEWS, type AppView } from "./appShell";
@@ -7,10 +18,12 @@ import { BrandMark } from "./BrandMark";
 
 const VIEW_ICONS: Record<AppView, React.ElementType> = {
   overview: BarChart2,
+  notes: BookOpen,
+  formulas: Sigma,
   ai: BrainCircuit,
   exams: ClipboardCheck,
+  chat: MessageSquareMore,
   logs: TerminalSquare,
-  notes: BookOpen,
   outputs: ArrowDownToLine,
   courses: FolderGit2,
   settings: Settings,
@@ -28,7 +41,7 @@ type AppSidebarProps = {
   onSelectCourse: (courseId: string) => void;
 };
 
-const STUDY_VIEWS: AppView[] = ["overview", "ai", "exams", "logs", "notes", "outputs"];
+const STUDY_VIEWS: AppView[] = ["overview", "notes", "formulas", "ai", "exams", "chat", "outputs", "logs"];
 const CONFIG_VIEWS: AppView[] = ["courses", "settings"];
 
 export function AppSidebar({
@@ -51,10 +64,10 @@ export function AppSidebar({
           <BrandMark className="brand-mark brand-mark--sidebar" />
           <div>
             <span className="sidebar__eyebrow">ObsidianOS</span>
-            <h1>Exam workspace</h1>
+            <h1>Study workspace</h1>
           </div>
         </div>
-        <p>One place to scan the vault, review notes, and prepare for the exam.</p>
+        <p>One place to scan the vault, review notes, study formulas, chat with the graph, and prepare for the exam.</p>
       </div>
 
       <div className="workspace-chip">

@@ -107,6 +107,205 @@ pub struct FormulaMetric {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FormulaSummary {
+    pub id: String,
+    pub latex: String,
+    pub normalized_latex: String,
+    pub note_count: usize,
+    pub source_note_ids: Vec<String>,
+    pub source_note_titles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaWorkspaceSummary {
+    pub formula_count: usize,
+    pub notes_with_formulas: usize,
+    pub formula_mentions: usize,
+    pub briefed_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaWorkspaceSnapshot {
+    pub course_id: String,
+    pub course_name: String,
+    pub generated_at: String,
+    pub formulas: Vec<FormulaSummary>,
+    pub summary: FormulaWorkspaceSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaLinkedNote {
+    pub note_id: String,
+    pub title: String,
+    pub relative_path: String,
+    pub excerpt: String,
+    pub headings: Vec<String>,
+    pub related_concepts: Vec<String>,
+    pub formula_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteChunkPreview {
+    pub chunk_id: String,
+    pub note_id: String,
+    pub note_title: String,
+    pub relative_path: String,
+    pub heading_path: String,
+    pub text: String,
+    pub ordinal: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaCoach {
+    pub meaning: String,
+    pub symbol_breakdown: Vec<String>,
+    pub use_cases: Vec<String>,
+    pub pitfalls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaPractice {
+    pub recall_prompts: Vec<String>,
+    pub short_answer_drills: Vec<String>,
+    pub multiple_choice_checks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaDerivation {
+    pub assumptions: Vec<String>,
+    pub intuition: String,
+    pub outline: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaBrief {
+    pub formula_id: String,
+    pub coach: FormulaCoach,
+    pub practice: FormulaPractice,
+    pub derivation: FormulaDerivation,
+    pub generated_at: String,
+    pub model: String,
+    pub source_signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormulaDetails {
+    pub course_id: String,
+    pub id: String,
+    pub latex: String,
+    pub normalized_latex: String,
+    pub note_count: usize,
+    pub source_note_ids: Vec<String>,
+    pub source_note_titles: Vec<String>,
+    pub linked_notes: Vec<FormulaLinkedNote>,
+    pub chunks: Vec<NoteChunkPreview>,
+    pub related_concepts: Vec<String>,
+    pub headings: Vec<String>,
+    pub brief: Option<FormulaBrief>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerateFormulaBriefRequest {
+    pub course_id: String,
+    pub formula_id: String,
+    pub force: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatScope {
+    Course,
+    Vault,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatMessageRole {
+    User,
+    Assistant,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatCitation {
+    pub chunk_id: String,
+    pub note_id: String,
+    pub note_title: String,
+    pub relative_path: String,
+    pub heading_path: String,
+    pub excerpt: String,
+    pub course_id: String,
+    pub course_name: String,
+    pub relevance: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessage {
+    pub id: String,
+    pub thread_id: String,
+    pub role: ChatMessageRole,
+    pub content: String,
+    pub created_at: String,
+    pub citations: Vec<ChatCitation>,
+    pub used_fallback: bool,
+    pub fallback_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatThreadSummary {
+    pub id: String,
+    pub scope: ChatScope,
+    pub course_id: Option<String>,
+    pub course_name: Option<String>,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub message_count: usize,
+    pub last_message_preview: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatThreadDetails {
+    pub id: String,
+    pub scope: ChatScope,
+    pub course_id: Option<String>,
+    pub course_name: Option<String>,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub messages: Vec<ChatMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateChatThreadRequest {
+    pub scope: ChatScope,
+    pub course_id: Option<String>,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendChatMessageRequest {
+    pub thread_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FlashcardSummary {
     pub set_count: usize,
     pub total_cards: usize,

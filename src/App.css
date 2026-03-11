@@ -1472,6 +1472,174 @@ code {
   font-size: 0.84rem;
 }
 
+.formula-workspace,
+.chat-workspace,
+.chat-workspace__rail,
+.chat-workspace__main,
+.chat-thread-group,
+.chat-transcript,
+.chat-message,
+.chat-message__body,
+.chat-citations,
+.formula-controls,
+.formula-chunk-list,
+.formula-detail-card {
+  display: grid;
+  gap: 12px;
+}
+
+.formula-workspace {
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 18px;
+}
+
+.formula-workspace--maximized {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.formula-workspace__rail {
+  min-width: 0;
+}
+
+.formula-workspace__rail--hidden {
+  display: none;
+}
+
+.formula-workspace__main {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.formula-detail-card,
+.formula-chunk,
+.chat-message {
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.formula-display {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  padding: 20px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.formula-display__math {
+  width: 100%;
+  justify-items: center;
+}
+
+.formula-display__source {
+  font-size: 0.9rem;
+}
+
+.formula-list {
+  max-height: 72vh;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.formula-chunk-list {
+  align-content: start;
+}
+
+.formula-chunk p,
+.chat-message__body p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.chat-workspace {
+  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.chat-workspace__rail {
+  align-content: start;
+}
+
+.chat-workspace__main {
+  min-width: 0;
+}
+
+.chat-thread-group {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.chat-thread-group--active {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.chat-transcript {
+  min-height: 420px;
+  max-height: 68vh;
+  overflow: auto;
+  padding-right: 6px;
+}
+
+.chat-message--assistant {
+  border-color: rgba(16, 185, 129, 0.25);
+}
+
+.chat-message__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.chat-citations {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.chat-citation,
+.chat-fallback {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+  text-align: left;
+}
+
+.chat-citation {
+  cursor: pointer;
+}
+
+.chat-citation strong,
+.chat-fallback strong {
+  color: var(--text);
+}
+
+.chat-citation span,
+.chat-fallback p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.chat-composer {
+  display: grid;
+  gap: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.chat-composer__input {
+  min-height: 160px;
+}
+
 @keyframes panel-in {
   from {
     opacity: 0;
@@ -1544,7 +1712,10 @@ code {
   .inspector-grid,
   .row-item,
   .log-table__head,
-  .log-row {
+  .log-row,
+  .formula-workspace,
+  .chat-workspace,
+  .chat-citations {
     grid-template-columns: 1fr;
   }
 
