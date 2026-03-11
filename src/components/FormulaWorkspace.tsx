@@ -222,21 +222,21 @@ export function FormulaWorkspace({
                 </dl>
               </section>
 
-              <section className="surface surface--split">
-                <div>
+              <section className="surface formula-context-grid">
+                <div className="formula-context-column">
                   <div className="surface__header">
                     <div>
                       <span className="surface__eyebrow">Linked notes</span>
                       <h3>Where this formula lives</h3>
                     </div>
                   </div>
-                  <div className="line-list">
+                  <div className="line-list formula-note-list">
                     {formulaDetails.linkedNotes.map((note) => (
                       <FormulaNoteRow key={note.noteId} note={note} onOpenNote={onOpenNote} />
                     ))}
                   </div>
                 </div>
-                <div>
+                <div className="formula-context-column">
                   <div className="surface__header">
                     <div>
                       <span className="surface__eyebrow">Source chunks</span>
@@ -332,18 +332,21 @@ function FormulaNoteRow({
   note: FormulaLinkedNote;
   onOpenNote: (noteId: string) => void;
 }) {
+  const headingChips = note.headings.slice(0, 2).map((heading) => compactLabel(heading, 32));
+  const conceptChips = note.relatedConcepts.slice(0, 1).map((concept) => compactLabel(concept, 24));
+
   return (
     <button className="line-item formula-note-card" onClick={() => onOpenNote(note.noteId)} type="button">
       <span className="line-item__title">{note.title}</span>
       <span className="line-item__subtitle">{shortenPath(note.relativePath)}</span>
       <p className="formula-note-card__summary">{formatPreviewText(note.excerpt, 220)}</p>
       <div className="formula-chip-list">
-        {note.headings.slice(0, 3).map((heading) => (
+        {headingChips.map((heading) => (
           <span key={`${note.noteId}-${heading}`} className="formula-chip">
             {heading}
           </span>
         ))}
-        {note.relatedConcepts.slice(0, 2).map((concept) => (
+        {conceptChips.map((concept) => (
           <span key={`${note.noteId}-${concept}`} className="formula-chip formula-chip--muted">
             {concept}
           </span>
@@ -361,11 +364,13 @@ function FormulaChunkCard({
   chunk: NoteChunkPreview;
   onOpenNote: (noteId: string) => void;
 }) {
+  const headingLabel = compactLabel(formatHeadingPath(chunk.headingPath), 52);
+
   return (
     <article className="formula-chunk">
       <div className="surface__header">
         <div>
-          <span className="surface__eyebrow">{chunk.headingPath}</span>
+          <span className="surface__eyebrow">{headingLabel}</span>
           <h3>{chunk.noteTitle}</h3>
         </div>
         <button className="button button--ghost" onClick={() => onOpenNote(chunk.noteId)} type="button">
@@ -374,7 +379,7 @@ function FormulaChunkCard({
       </div>
       <p className="formula-chunk__body">{formatPreviewText(chunk.text, 340)}</p>
       <div className="formula-chip-list">
-        <span className="formula-chip">{chunk.headingPath}</span>
+        <span className="formula-chip">{headingLabel}</span>
         <span className="formula-chip formula-chip--muted">Chunk {chunk.ordinal + 1}</span>
       </div>
       <span className="line-item__meta">{shortenPath(chunk.relativePath)}</span>
@@ -463,12 +468,15 @@ function capitalize(value: string) {
 
 function formatPreviewText(value: string, maxLength: number) {
   const cleaned = value
+    .replace(/\$\$[\s\S]*?\$\$/g, " ")
+    .replace(/\$[^$\n]+\$/g, " ")
     .replace(/\[\[([^\]]+)\]\]/g, "$1")
     .replace(/#+\s*/g, "")
     .replace(/\*\*/g, "")
     .replace(/__+/g, "")
-    .replace(/\$[^$]+\$/g, " formula ")
-    .replace(/-{3,}/g, " ")
+    .replace(/\\[a-zA-Z]+(?:\s*\{[^}]*\}|\s*\[[^\]]*\]|[_^][A-Za-z0-9{}()+\-\\=.,]*)*/g, " ")
+    .replace(/[{}_^]/g, " ")
+    .replace(/-{3,}/g, " · ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -477,4 +485,25 @@ function formatPreviewText(value: string, maxLength: number) {
   }
 
   return `${cleaned.slice(0, maxLength).trim()}...`;
+}
+
+function formatHeadingPath(value: string) {
+  const parts = value
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length <= 2) {
+    return parts.join(" · ");
+  }
+
+  return `${parts[0]} · ${parts[parts.length - 1] ?? ""}`;
+}
+
+function compactLabel(value: string, maxLength: number) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength - 1).trim()}...`;
 }

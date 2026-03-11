@@ -28,14 +28,14 @@ use crate::models::{
     FormulaWorkspaceSummary, GenerateFormulaBriefRequest, GitCommitItem, GitCourseActivityRow,
     GitNoteActivityRow, GitSummary, GitTimelinePoint, GraphStats, NoteChunkPreview, NoteDetails,
     NoteMasteryState, NoteSummary, RevisionNoteRequest, RevisionNoteResult, RevisionSummary,
-    ScanReport, ScanStatus, SendChatMessageRequest, StatisticsAiSection,
-    StatisticsCountBucket, StatisticsExamPoint, StatisticsExamsSection, StatisticsHighlight,
-    StatisticsKnowledgeSection, StatisticsKnowledgeSummary, StatisticsNoteRow,
-    StatisticsNotesSection, StatisticsNotesSummary, StatisticsOutputsSection,
-    StatisticsOutputsSummary, StatisticsOverview, StatisticsOverviewSection, StatisticsResponse,
-    StatisticsScope, StatisticsSnapshotPoint, StatisticsValuePoint, StatisticsVaultActivitySection,
-    StatisticsGitSection, StatisticsAiSummary, StatisticsExamsSummary, ValidationResult,
-    VaultActivityBucket, VaultActivitySummary, VaultConfig, WeakNote, WorkspaceSnapshot,
+    ScanReport, ScanStatus, SendChatMessageRequest, StatisticsAiSection, StatisticsAiSummary,
+    StatisticsCountBucket, StatisticsExamPoint, StatisticsExamsSection, StatisticsExamsSummary,
+    StatisticsGitSection, StatisticsHighlight, StatisticsKnowledgeSection,
+    StatisticsKnowledgeSummary, StatisticsNoteRow, StatisticsNotesSection, StatisticsNotesSummary,
+    StatisticsOutputsSection, StatisticsOutputsSummary, StatisticsOverview,
+    StatisticsOverviewSection, StatisticsResponse, StatisticsScope, StatisticsSnapshotPoint,
+    StatisticsValuePoint, StatisticsVaultActivitySection, ValidationResult, VaultActivityBucket,
+    VaultActivitySummary, VaultConfig, WeakNote, WorkspaceSnapshot,
 };
 
 pub struct Database {
@@ -1061,9 +1061,13 @@ impl Database {
             }
         };
 
-        let history = self.list_statistics_history(scope, selected_course.as_ref().map(|course| course.id.as_str()))?;
-        let exam_history =
-            self.list_statistics_exam_points(selected_course.as_ref().map(|course| course.id.as_str()))?;
+        let history = self.list_statistics_history(
+            scope,
+            selected_course.as_ref().map(|course| course.id.as_str()),
+        )?;
+        let exam_history = self.list_statistics_exam_points(
+            selected_course.as_ref().map(|course| course.id.as_str()),
+        )?;
         let activity_buckets =
             self.build_activity_buckets(selected_course.as_ref().map(|course| course.id.as_str()))?;
         let course_rows = if scope == StatisticsScope::Vault {
@@ -1103,12 +1107,17 @@ impl Database {
         let attempt_history = build_attempt_history(&exam_history);
         let verdict_mix =
             self.build_exam_verdict_mix(selected_course.as_ref().map(|course| course.id.as_str()))?;
-        let mastery_distribution =
-            self.build_mastery_distribution(selected_course.as_ref().map(|course| course.id.as_str()))?;
+        let mastery_distribution = self.build_mastery_distribution(
+            selected_course.as_ref().map(|course| course.id.as_str()),
+        )?;
         let latest_flashcards = aggregate_flashcard_summary(&course_bundles);
         let latest_revision = aggregate_revision_summary(&course_bundles);
-        let git_result =
-            self.try_build_git_analytics(&vault.vault_path, &courses, scope, selected_course.as_ref())?;
+        let git_result = self.try_build_git_analytics(
+            &vault.vault_path,
+            &courses,
+            scope,
+            selected_course.as_ref(),
+        )?;
         let (git_available, git_error, git_data) = match git_result {
             Ok(value) => (value.is_some(), None, value),
             Err(error) => (false, Some(error), None),
@@ -1140,7 +1149,10 @@ impl Database {
                 average_note_strength: overview_summary.average_note_strength,
                 weak_note_count: overview_summary.weak_note_count,
                 isolated_notes: overview_summary.isolated_notes,
-                stale_note_count: note_rows.iter().filter(|note| is_stale_modified_at(note.modified_at.as_deref())).count(),
+                stale_note_count: note_rows
+                    .iter()
+                    .filter(|note| is_stale_modified_at(note.modified_at.as_deref()))
+                    .count(),
             },
             history: history.clone(),
             strength_buckets: build_strength_buckets(&note_rows),
@@ -1299,7 +1311,10 @@ impl Database {
         }))
     }
 
-    fn build_course_statistics_bundle(&self, course: &StoredCourse) -> Result<CourseStatisticsBundle> {
+    fn build_course_statistics_bundle(
+        &self,
+        course: &StoredCourse,
+    ) -> Result<CourseStatisticsBundle> {
         let notes = self.list_notes(&course.id)?;
         let concepts = self.list_concepts(&course.id)?;
         let formulas = self.list_formulas(&course.id)?;
@@ -1644,12 +1659,7 @@ impl Database {
             for note in self.list_notes(&course.id)? {
                 map.insert(
                     normalize_relative_path(&note.relative_path),
-                    (
-                        note.id,
-                        note.title,
-                        course.id.clone(),
-                        course.name.clone(),
-                    ),
+                    (note.id, note.title, course.id.clone(), course.name.clone()),
                 );
             }
         }
@@ -4953,9 +4963,11 @@ impl Database {
                 params![course_id],
                 |row| row.get::<_, i64>(0).map(|value| value as usize),
             )?,
-            None => self.conn.query_row("SELECT COUNT(*) FROM exam_attempts", [], |row| {
-                row.get::<_, i64>(0).map(|value| value as usize)
-            })?,
+            None => self
+                .conn
+                .query_row("SELECT COUNT(*) FROM exam_attempts", [], |row| {
+                    row.get::<_, i64>(0).map(|value| value as usize)
+                })?,
         };
 
         let latest_exam_score = match course_id {
@@ -4978,20 +4990,25 @@ impl Database {
         };
 
         let average_exam_score = match course_id {
-            Some(course_id) => self
-                .conn
-                .query_row(
-                    "SELECT AVG(score_percent) FROM exam_attempts WHERE course_id = ?1",
-                    params![course_id],
-                    |row| row.get::<_, Option<f64>>(0),
-                )?,
-            None => self.conn.query_row("SELECT AVG(score_percent) FROM exam_attempts", [], |row| {
-                row.get::<_, Option<f64>>(0)
-            })?,
+            Some(course_id) => self.conn.query_row(
+                "SELECT AVG(score_percent) FROM exam_attempts WHERE course_id = ?1",
+                params![course_id],
+                |row| row.get::<_, Option<f64>>(0),
+            )?,
+            None => {
+                self.conn
+                    .query_row("SELECT AVG(score_percent) FROM exam_attempts", [], |row| {
+                        row.get::<_, Option<f64>>(0)
+                    })?
+            }
         }
         .map(round_percentage);
 
-        Ok((attempt_count, latest_exam_score.map(round_percentage), average_exam_score))
+        Ok((
+            attempt_count,
+            latest_exam_score.map(round_percentage),
+            average_exam_score,
+        ))
     }
 
     fn list_statistics_history(
@@ -5034,7 +5051,10 @@ impl Database {
         let rows = match scope {
             StatisticsScope::Course => statement
                 .query_map(
-                    params![scope_value, course_id.ok_or_else(|| anyhow!("course statistics require a course"))?],
+                    params![
+                        scope_value,
+                        course_id.ok_or_else(|| anyhow!("course statistics require a course"))?
+                    ],
                     read_statistics_snapshot_row,
                 )?
                 .collect::<std::result::Result<Vec<_>, _>>()?,
@@ -5109,16 +5129,20 @@ impl Database {
                 params![course_id],
                 |row| row.get::<_, i64>(0).map(|value| value as usize),
             )?,
-            None => self.conn.query_row("SELECT COUNT(*) FROM note_records", [], |row| {
-                row.get::<_, i64>(0).map(|value| value as usize)
-            })?,
+            None => self
+                .conn
+                .query_row("SELECT COUNT(*) FROM note_records", [], |row| {
+                    row.get::<_, i64>(0).map(|value| value as usize)
+                })?,
         };
 
         let mut statement = match course_id {
             Some(_) => self
                 .conn
                 .prepare("SELECT source_modified_at FROM note_records WHERE course_id = ?1")?,
-            None => self.conn.prepare("SELECT source_modified_at FROM note_records")?,
+            None => self
+                .conn
+                .prepare("SELECT source_modified_at FROM note_records")?,
         };
 
         let modified_rows = match course_id {
@@ -5180,7 +5204,11 @@ impl Database {
         ])
     }
 
-    fn append_statistics_snapshots(&self, courses: &[StoredCourse], captured_at: &str) -> Result<()> {
+    fn append_statistics_snapshots(
+        &self,
+        courses: &[StoredCourse],
+        captured_at: &str,
+    ) -> Result<()> {
         for course in courses {
             let overview = self.build_course_statistics_overview(&course.id)?;
             self.insert_statistics_snapshot(
@@ -5192,7 +5220,12 @@ impl Database {
         }
 
         let vault_overview = self.build_vault_statistics_overview(courses)?;
-        self.insert_statistics_snapshot(StatisticsScope::Vault, None, captured_at, &vault_overview)?;
+        self.insert_statistics_snapshot(
+            StatisticsScope::Vault,
+            None,
+            captured_at,
+            &vault_overview,
+        )?;
         Ok(())
     }
 
@@ -6539,7 +6572,13 @@ fn aggregate_revision_summary(course_bundles: &[CourseStatisticsBundle]) -> Revi
                 .revision
                 .last_generated_at
                 .as_ref()
-                .map(|created_at| (created_at.clone(), bundle.revision.note_path.clone(), bundle.revision.item_count))
+                .map(|created_at| {
+                    (
+                        created_at.clone(),
+                        bundle.revision.note_path.clone(),
+                        bundle.revision.item_count,
+                    )
+                })
         })
         .max_by(|left, right| left.0.cmp(&right.0));
     RevisionSummary {
@@ -6552,7 +6591,11 @@ fn aggregate_revision_summary(course_bundles: &[CourseStatisticsBundle]) -> Revi
 fn build_attempt_history(exam_history: &[StatisticsExamPoint]) -> Vec<StatisticsValuePoint> {
     let mut grouped = BTreeMap::<String, usize>::new();
     for point in exam_history {
-        let label = point.submitted_at.get(0..10).unwrap_or(&point.submitted_at).to_string();
+        let label = point
+            .submitted_at
+            .get(0..10)
+            .unwrap_or(&point.submitted_at)
+            .to_string();
         *grouped.entry(label).or_insert(0) += 1;
     }
     grouped
@@ -6624,7 +6667,10 @@ fn build_strength_buckets(note_rows: &[StatisticsNoteRow]) -> Vec<StatisticsCoun
     ]
 }
 
-fn sort_note_rows_by_strength(note_rows: &[StatisticsNoteRow], descending: bool) -> Vec<StatisticsNoteRow> {
+fn sort_note_rows_by_strength(
+    note_rows: &[StatisticsNoteRow],
+    descending: bool,
+) -> Vec<StatisticsNoteRow> {
     let mut rows = note_rows.to_vec();
     rows.sort_by(|left, right| {
         if descending {
@@ -6651,7 +6697,11 @@ fn sort_note_rows_by_links(note_rows: &[StatisticsNoteRow]) -> Vec<StatisticsNot
 
 fn sort_note_rows_by_modified_at(note_rows: &[StatisticsNoteRow]) -> Vec<StatisticsNoteRow> {
     let mut rows = note_rows.to_vec();
-    rows.sort_by(|left, right| left.modified_at.cmp(&right.modified_at).then_with(|| left.title.cmp(&right.title)));
+    rows.sort_by(|left, right| {
+        left.modified_at
+            .cmp(&right.modified_at)
+            .then_with(|| left.title.cmp(&right.title))
+    });
     rows.into_iter().take(8).collect()
 }
 
@@ -6695,7 +6745,10 @@ fn build_vault_activity_summary(
         recent_notes,
         stale_notes,
         unknown_notes,
-        most_recent_modified_at: note_rows.iter().filter_map(|note| note.modified_at.clone()).max(),
+        most_recent_modified_at: note_rows
+            .iter()
+            .filter_map(|note| note.modified_at.clone())
+            .max(),
     }
 }
 
@@ -6704,10 +6757,10 @@ fn build_overview_highlights(
     git: Option<&GitAnalytics>,
 ) -> Vec<StatisticsHighlight> {
     let mut highlights = Vec::new();
-    if let Some(best) = course_rows
-        .iter()
-        .max_by(|left, right| left.coverage_percentage.total_cmp(&right.coverage_percentage))
-    {
+    if let Some(best) = course_rows.iter().max_by(|left, right| {
+        left.coverage_percentage
+            .total_cmp(&right.coverage_percentage)
+    }) {
         highlights.push(StatisticsHighlight {
             label: "Strongest coverage".to_string(),
             value: format!("{} {:.1}%", best.course_name, best.coverage_percentage),
@@ -6717,7 +6770,10 @@ fn build_overview_highlights(
     if let Some(weakest) = course_rows.iter().max_by_key(|row| row.weak_note_count) {
         highlights.push(StatisticsHighlight {
             label: "Most fragile course".to_string(),
-            value: format!("{} {} weak notes", weakest.course_name, weakest.weak_note_count),
+            value: format!(
+                "{} {} weak notes",
+                weakest.course_name, weakest.weak_note_count
+            ),
             tone: "warning".to_string(),
         });
     }
@@ -6743,7 +6799,11 @@ fn is_stale_modified_at(value: Option<&str>) -> bool {
 fn build_git_timeline(commits: &[GitCommitRecord], count_paths: bool) -> Vec<GitTimelinePoint> {
     let mut grouped = BTreeMap::<String, (usize, usize)>::new();
     for commit in commits {
-        let bucket = commit.committed_at.get(0..7).unwrap_or(&commit.committed_at).to_string();
+        let bucket = commit
+            .committed_at
+            .get(0..7)
+            .unwrap_or(&commit.committed_at)
+            .to_string();
         let entry = grouped.entry(bucket).or_insert((0, 0));
         entry.0 += 1;
         entry.1 += if count_paths {
@@ -6804,7 +6864,10 @@ fn build_git_course_activity_rows(
             }
         }
     }
-    let mut rows = map.into_values().filter(|row| row.commit_count > 0).collect::<Vec<_>>();
+    let mut rows = map
+        .into_values()
+        .filter(|row| row.commit_count > 0)
+        .collect::<Vec<_>>();
     rows.sort_by(|left, right| {
         right
             .commit_count
@@ -6840,15 +6903,13 @@ fn build_git_note_rows(
             let mapped = note_map.get(&path);
             GitNoteActivityRow {
                 note_id: mapped.map(|value| value.0.clone()),
-                title: mapped
-                    .map(|value| value.1.clone())
-                    .unwrap_or_else(|| {
-                        Path::new(&path)
-                            .file_stem()
-                            .and_then(|value| value.to_str())
-                            .unwrap_or("Note")
-                            .to_string()
-                    }),
+                title: mapped.map(|value| value.1.clone()).unwrap_or_else(|| {
+                    Path::new(&path)
+                        .file_stem()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("Note")
+                        .to_string()
+                }),
                 relative_path: path,
                 course_id: mapped.map(|value| value.2.clone()),
                 course_name: mapped.map(|value| value.3.clone()),
@@ -7676,7 +7737,8 @@ mod tests {
             .expect("save course");
 
         database.run_scan().expect("first scan");
-        fs::write(course_dir.join("limits.md"), "# Limits\n\nScan me twice.\n").expect("rewrite note");
+        fs::write(course_dir.join("limits.md"), "# Limits\n\nScan me twice.\n")
+            .expect("rewrite note");
         database.run_scan().expect("second scan");
 
         let source_modified_at = database

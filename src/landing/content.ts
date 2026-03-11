@@ -22,18 +22,17 @@ export const LANDING_NAV: LandingSectionLink[] = [
   { id: "workflow", label: "Workflow" },
   { id: "showcase", label: "Showcase" },
   { id: "scope", label: "FAQ" },
-  { id: "download", label: "Download" },
 ];
 
 export const HERO_CTAS: LandingCta[] = [
   {
-    label: "Download for Windows",
+    label: "Download",
     href: LANDING_LINKS.releases,
     note: "GitHub Releases",
     variant: "primary",
   },
   {
-    label: "View repository",
+    label: "View Source",
     href: LANDING_LINKS.repository,
     note: "Source, issues, changelog",
     variant: "secondary",
@@ -47,10 +46,10 @@ export const HERO_CTAS: LandingCta[] = [
 ];
 
 export const HERO_PILLARS = [
-  "Windows desktop app",
+  "Cross-platform desktop app",
   "Obsidian vault scanning",
   "Graph-driven exam prep",
-  "Static site only for product overview",
+  "AI-powered enrichment",
 ] as const;
 
 export const FEATURE_CARDS: LandingFeature[] = [
@@ -58,7 +57,7 @@ export const FEATURE_CARDS: LandingFeature[] = [
     eyebrow: "Vault scan",
     title: "Turn top-level course folders into study workspaces.",
     description:
-      "ObsidianOS reads markdown notes from your vault, groups them by course, and builds a working library without changing your desktop runtime.",
+      "ObsidianOS reads markdown notes from your vault, groups them by course, and builds a working library without changing your existing workflow.",
     bullets: [
       "One connected Obsidian vault at a time",
       "Markdown-first indexing for .md files",
@@ -194,29 +193,34 @@ export const SHOWCASE_ITEMS: LandingShowcaseItem[] = [
 
 export const FAQ_ITEMS: LandingFaqItem[] = [
   {
-    question: "Can I use ObsidianOS in the browser?",
+    question: "What platforms does ObsidianOS run on?",
     answer:
-      "No. This site is a landing page only. The product itself runs as a Windows desktop app built with Tauri, and the browser build is just the public showcase.",
+      "ObsidianOS is built with Tauri and runs on Windows, macOS, and Linux. The desktop app needs the Rust toolchain and WebView2 (Windows) or WebKitGTK (Linux) to build from source.",
   },
   {
-    question: "What does the app read today?",
+    question: "Does it modify my Obsidian vault?",
     answer:
-      "The current scope is one connected Obsidian vault at a time, with top-level folders treated as course spaces and markdown notes indexed from .md files.",
+      "Only when you explicitly generate outputs. Scan and review are read-only. Flashcard files, revision notes, and exam artifacts are written to configurable output folders inside the vault.",
   },
   {
-    question: "Does it rely on a hosted backend?",
+    question: "Does it need an internet connection?",
     answer:
-      "No backend is required for the core workflow. The current product uses local deterministic extraction, with optional OpenRouter or OpenAI-compatible refinement where configured.",
+      "Not for the core workflow. Vault scanning, graph analysis, and exam generation all run locally. An internet connection is only needed if you enable optional AI enrichment via OpenRouter or an OpenAI-compatible API.",
   },
   {
-    question: "What outputs does it generate?",
+    question: "How does AI enrichment work?",
     answer:
-      "Today the app can produce markdown flashcards, optional Anki-style CSV export, and revision notes written back into the vault.",
+      "You can optionally configure an OpenRouter or OpenAI-compatible endpoint in Settings. When enabled, it enriches note summaries, generates smarter flashcards, and provides formula briefings. All AI calls are opt-in and use your own API key.",
   },
   {
-    question: "What is the main download path?",
+    question: "Can I use it alongside the Obsidian editor?",
     answer:
-      "The primary public download target is the GitHub Releases page for this repository.",
+      "Yes. ObsidianOS reads the same vault folder Obsidian uses. You can edit notes in Obsidian and re-scan in ObsidianOS to pick up changes. There's no lock-in or sync conflict.",
+  },
+  {
+    question: "Where do I download the app?",
+    answer:
+      "From the GitHub Releases page. Windows builds include an MSI or NSIS installer. For macOS and Linux, you can build from source using the instructions in the README.",
   },
 ];
 

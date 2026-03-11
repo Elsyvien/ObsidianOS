@@ -471,7 +471,14 @@ pub fn generate_formula_brief(
 
     let json = send_chat_request(settings, payload)?;
     let content = message_content(&json)?;
-    let brief: FormulaBriefPayload = parse_json_blob(&content)?;
+    let brief = parse_formula_brief_payload(
+        &content,
+        course_name,
+        latex,
+        related_concepts,
+        headings,
+        chunks,
+    )?;
     validate_formula_brief(&brief)?;
     Ok(brief)
 }
@@ -646,6 +653,16 @@ fn parse_json_blob<T>(content: &str) -> Result<T>
 where
     T: for<'de> Deserialize<'de>,
 {
+    let value = parse_json_value_blob(content)?;
+    serde_json::from_value(value).with_context(|| {
+        let preview = normalized_preview(content, 220);
+        format!(
+            "AI response used valid JSON but did not match the expected schema. Provider returned: {preview}"
+        )
+    })
+}
+
+fn parse_json_value_blob(content: &str) -> Result<Value> {
     let trimmed = content.trim();
     let cleaned = trimmed
         .strip_prefix("```json")
@@ -655,30 +672,31 @@ where
         .unwrap_or(trimmed);
     let extracted = extract_json_object(cleaned).unwrap_or(cleaned);
 
-    parse_json_candidate(cleaned)
-        .or_else(|_| parse_json_candidate(extracted))
+    parse_json_value_candidate(cleaned)
+        .or_else(|_| parse_json_value_candidate(extracted))
         .with_context(|| {
-            let preview = cleaned
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .chars()
-                .take(220)
-                .collect::<String>();
+            let preview = normalized_preview(cleaned, 220);
             format!("AI response was not valid JSON. Provider returned: {preview}")
         })
 }
 
-fn parse_json_candidate<T>(content: &str) -> Result<T>
-where
-    T: for<'de> Deserialize<'de>,
-{
+fn parse_json_value_candidate(content: &str) -> Result<Value> {
     let repaired = repair_json_like_blob(content);
     serde_json::from_str(content)
         .map_err(anyhow::Error::from)
         .or_else(|_| serde_json::from_str(&repaired).map_err(anyhow::Error::from))
         .or_else(|_| json5::from_str(content).map_err(anyhow::Error::from))
         .or_else(|_| json5::from_str(&repaired).map_err(anyhow::Error::from))
+}
+
+fn normalized_preview(content: &str, limit: usize) -> String {
+    content
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(limit)
+        .collect::<String>()
 }
 
 fn format_provider_rejection(status: StatusCode, body: &str) -> String {
@@ -731,9 +749,7 @@ fn normalize_error_text(value: &str) -> String {
 }
 
 fn repair_json_like_blob(content: &str) -> String {
-    let normalized = content
-        .replace(['“', '”'], "\"")
-        .replace(['‘', '’'], "'");
+    let normalized = content.replace(['“', '”'], "\"").replace(['‘', '’'], "'");
     let escaped = escape_invalid_backslashes(&normalized);
     remove_trailing_commas(&escaped)
 }
@@ -925,6 +941,164 @@ fn extract_json_object(content: &str) -> Option<&str> {
     }
 
     None
+}
+
+fn parse_formula_brief_payload(
+    content: &str,
+    course_name: &str,
+    latex: &str,
+    related_concepts: &[String],
+    headings: &[String],
+    chunks: &[ChatContextChunkInput],
+) -> Result<FormulaBriefPayload> {
+    parse_json_blob::<FormulaBriefPayload>(content).or_else(|direct_error| {
+        let json = parse_json_value_blob(content)?;
+        merge_formula_brief_with_defaults(
+            &json,
+            build_mock_formula_brief(course_name, latex, related_concepts, headings, chunks),
+        )
+        .with_context(|| format!("{direct_error:#}"))
+    })
+}
+
+fn merge_formula_brief_with_defaults(
+    json: &Value,
+    mut brief: FormulaBriefPayload,
+) -> Result<FormulaBriefPayload> {
+    let root = json
+        .as_object()
+        .ok_or_else(|| anyhow!("formula brief response root must be a JSON object"))?;
+    let mut applied = false;
+
+    if let Some(section) = root.get("coach").and_then(Value::as_object) {
+        if let Some(value) = object_string(section, &["meaning", "summary", "explanation"]) {
+            brief.coach.meaning = value;
+        }
+        if let Some(value) =
+            object_string_list(section, &["symbolBreakdown", "symbol_breakdown", "symbols"])
+        {
+            brief.coach.symbol_breakdown = value;
+        }
+        if let Some(value) = object_string_list(
+            section,
+            &["useCases", "use_cases", "applications", "examples"],
+        ) {
+            brief.coach.use_cases = value;
+        }
+        if let Some(value) =
+            object_string_list(section, &["pitfalls", "commonPitfalls", "common_pitfalls"])
+        {
+            brief.coach.pitfalls = value;
+        }
+        applied = true;
+    }
+
+    if let Some(section) = root.get("practice").and_then(Value::as_object) {
+        if let Some(value) = object_string_list(
+            section,
+            &["recallPrompts", "recall_prompts", "recallQuestions"],
+        ) {
+            brief.practice.recall_prompts = value;
+        }
+        if let Some(value) = object_string_list(
+            section,
+            &["shortAnswerDrills", "short_answer_drills", "shortAnswers"],
+        ) {
+            brief.practice.short_answer_drills = value;
+        }
+        if let Some(value) = object_string_list(
+            section,
+            &[
+                "multipleChoiceChecks",
+                "multiple_choice_checks",
+                "mcqChecks",
+            ],
+        ) {
+            brief.practice.multiple_choice_checks = value;
+        }
+        applied = true;
+    }
+
+    if let Some(section) = root.get("derivation").and_then(Value::as_object) {
+        if let Some(value) = object_string_list(section, &["assumptions", "conditions"]) {
+            brief.derivation.assumptions = value;
+        }
+        if let Some(value) = object_string(section, &["intuition", "idea", "summary"]) {
+            brief.derivation.intuition = value;
+        }
+        if let Some(value) = object_string_list(section, &["outline", "steps"]) {
+            brief.derivation.outline = value;
+        }
+        applied = true;
+    }
+
+    if !applied {
+        return Err(anyhow!(
+            "formula brief JSON did not include `coach`, `practice`, or `derivation` sections"
+        ));
+    }
+
+    Ok(brief)
+}
+
+fn object_string(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        object
+            .get(*key)
+            .and_then(value_as_string)
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn object_string_list(
+    object: &serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<Vec<String>> {
+    keys.iter().find_map(|key| {
+        object
+            .get(*key)
+            .map(value_as_string_list)
+            .filter(|values| !values.is_empty())
+    })
+}
+
+fn value_as_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Value::Object(map) => map
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(ToOwned::to_owned),
+        Value::Array(values) => {
+            let joined = values
+                .iter()
+                .filter_map(value_as_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            if joined.is_empty() {
+                None
+            } else {
+                Some(joined)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn value_as_string_list(value: &Value) -> Vec<String> {
+    match value {
+        Value::Array(values) => values.iter().filter_map(value_as_string).collect(),
+        _ => value_as_string(value).into_iter().collect(),
+    }
 }
 
 fn validate_generated_exam(
@@ -1464,9 +1638,9 @@ struct FlashcardEnvelope {
 mod tests {
     use super::{
         answer_chat_query, extract_json_object, format_provider_rejection, generate_exam,
-        generate_formula_brief, grade_exam_attempt, message_content, parse_json_blob,
-        AiProviderSettings,
-        ChatContextChunkInput, ExamGenerationNoteInput, ExamGradingQuestionInput,
+        generate_formula_brief, grade_exam_attempt, message_content, parse_formula_brief_payload,
+        parse_json_blob, AiProviderSettings, ChatContextChunkInput, ExamGenerationNoteInput,
+        ExamGradingQuestionInput,
     };
     use crate::models::{
         ChatMessageRole, ChatScope, ExamAnswerValue, ExamBuilderInput, ExamDifficulty, ExamPreset,
@@ -1551,14 +1725,59 @@ mod tests {
 
     #[test]
     fn parses_json5_like_model_output_with_single_quotes_and_trailing_comma() {
-        let payload: SamplePayload =
-            parse_json_blob("{summary: 'ready',}").expect("payload");
+        let payload: SamplePayload = parse_json_blob("{summary: 'ready',}").expect("payload");
         assert_eq!(
             payload,
             SamplePayload {
                 summary: "ready".to_string()
             }
         );
+    }
+
+    #[test]
+    fn reports_schema_mismatch_for_valid_json_payload() {
+        let error = parse_json_blob::<SamplePayload>("{\"coach\":{\"meaning\":\"ready\"}}")
+            .expect_err("should reject schema mismatch");
+        assert!(
+            error
+                .to_string()
+                .contains("did not match the expected schema"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn fills_missing_formula_brief_sections_from_defaults() {
+        let chunks = vec![ChatContextChunkInput {
+            citation_id: "c1".to_string(),
+            note_id: "note-1".to_string(),
+            note_title: "Series".to_string(),
+            relative_path: "Math/Series.md".to_string(),
+            heading_path: "Convergence".to_string(),
+            text: "This note uses the series to approximate functions.".to_string(),
+        }];
+        let brief = parse_formula_brief_payload(
+            r#"{
+                "coach": {
+                    "meaning": "The formula is an infinite series.",
+                    "symbolBreakdown": "Explain what a_k means."
+                }
+            }"#,
+            "Analysis",
+            "\\sum_{k=0}^{\\infty} a_k",
+            &["Series".to_string()],
+            &["Convergence".to_string()],
+            &chunks,
+        )
+        .expect("formula brief");
+
+        assert_eq!(brief.coach.meaning, "The formula is an infinite series.");
+        assert_eq!(
+            brief.coach.symbol_breakdown,
+            vec!["Explain what a_k means.".to_string()]
+        );
+        assert!(!brief.practice.recall_prompts.is_empty());
+        assert!(!brief.derivation.intuition.trim().is_empty());
     }
 
     #[test]
