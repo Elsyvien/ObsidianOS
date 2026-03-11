@@ -32,6 +32,7 @@ import {
   type CourseDraft,
 } from "./lib";
 import type {
+  ActivityLogEntry,
   AiSettingsInput,
   CourseConfigInput,
   FlashcardGenerationResult,
@@ -62,6 +63,7 @@ function App() {
   const [scanReport, setScanReport] = useState<ScanReport | null>(null);
   const [flashcardResult, setFlashcardResult] = useState<FlashcardGenerationResult | null>(null);
   const [revisionResult, setRevisionResult] = useState<RevisionNoteResult | null>(null);
+  const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([]);
 
   const deferredCourseId = useDeferredValue(selectedCourseId);
   const dashboard = workspace.dashboard;
@@ -235,7 +237,7 @@ function App() {
       if (!isPreview && !snapshot.vault) {
         setActiveView("settings");
       }
-      setBanner({
+      showBanner({
         tone: "neutral",
         title: isPreview ? "Browser preview ready" : snapshot.vault ? "Workspace ready" : "Connect a vault to begin",
         detail: isPreview
@@ -243,7 +245,7 @@ function App() {
           : snapshot.vault
             ? "Local vault access is available. Choose a course, run a scan, and work from the note graph."
             : "Add a vault in Settings, then save a course folder and run the first scan.",
-      });
+      }, "Overview");
     } catch (error) {
       setWorkspace(EMPTY_WORKSPACE);
       setErrorBanner("Workspace failed to load", error);
@@ -272,7 +274,24 @@ function App() {
   }
 
   function setErrorBanner(title: string, error: unknown) {
-    setBanner({ tone: "error", title, detail: getErrorMessage(error) });
+    showBanner({ tone: "error", title, detail: getErrorMessage(error) });
+  }
+
+  function showBanner(nextBanner: NonNullable<BannerState>, scope = viewMeta.label) {
+    setBanner(nextBanner);
+    setActivityLog((current) =>
+      [
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          timestamp: new Date().toISOString(),
+          scope,
+          title: nextBanner.title,
+          detail: nextBanner.detail ?? "",
+          tone: nextBanner.tone,
+        },
+        ...current,
+      ].slice(0, 80),
+    );
   }
 
   async function runBusyTask<T>(action: string, task: () => Promise<T>, onSuccess: (result: T) => void) {
@@ -309,11 +328,36 @@ function App() {
     });
   }
 
-  function focusNote(noteId: string) {
+  function focusNote(noteId: string, nextView: AppView = "notes") {
     startTransition(() => {
       setSelectedNoteId(noteId);
-      setActiveView("notes");
+      setActiveView(nextView);
     });
+  }
+
+  function applyAiSelection(noteIds: string[], label: string, mode: "append" | "replace" = "replace") {
+    const availableNoteIds = new Set(dashboard?.notes.map((note) => note.id) ?? []);
+    const nextSelection = Array.from(new Set(noteIds.filter((noteId) => availableNoteIds.has(noteId))));
+
+    if (!nextSelection.length) {
+      showBanner({
+        tone: "error",
+        title: `${label} unavailable`,
+        detail: "This course does not have enough notes in the required AI state yet.",
+      }, "AI");
+      return;
+    }
+
+    setSelectedNoteIds((current) =>
+      mode === "append" ? Array.from(new Set([...current, ...nextSelection])) : nextSelection,
+    );
+    setSelectedNoteId(nextSelection[0] ?? null);
+    setActiveView("ai");
+    showBanner({
+      tone: "neutral",
+      title: label,
+      detail: `${nextSelection.length} notes are now in the study queue.`,
+    }, "AI");
   }
 
   function updateCourseField(field: EditableCourseField, value: string) {
@@ -335,38 +379,38 @@ function App() {
 
   const connect = () => {
     if (!vaultPath.trim()) {
-      setBanner({
+      showBanner({
         tone: "error",
         title: "Vault path required",
         detail: isPreview
           ? "Enter a path if you want to relabel the preview workspace. Live folder access still requires the desktop app."
           : "Enter an absolute path before connecting the vault.",
-      });
+      }, "Setup");
       return;
     }
 
     void runBusyTask("Vault connection failed", () => connectVault(vaultPath.trim()), (next) => {
       applyWorkspace(next);
       setActiveView("overview");
-      setBanner({
+      showBanner({
         tone: isPreview ? "neutral" : "success",
         title: isPreview ? "Preview path updated" : "Vault connected",
         detail: isPreview
           ? "Browser preview does not touch the filesystem. The entered path is shown only as local context."
           : vaultPath.trim(),
-      });
+      }, "Setup");
     });
   };
 
   const browseVault = () =>
     void runBusyTask("Vault picker failed", chooseVaultDirectory, (selected) => {
       if (!selected) {
-        setBanner({ tone: "neutral", title: "Vault picker closed" });
+        showBanner({ tone: "neutral", title: "Vault picker closed" }, "Setup");
         return;
       }
 
       setVaultPath(selected);
-      setBanner({ tone: "neutral", title: "Vault path selected", detail: selected });
+      showBanner({ tone: "neutral", title: "Vault path selected", detail: selected }, "Setup");
     });
 
   const disconnect = () =>
@@ -374,22 +418,22 @@ function App() {
       applyWorkspace(next);
       setCourseDraft(createCourseDraft());
       setActiveView("settings");
-      setBanner({
+      showBanner({
         tone: "neutral",
         title: isPreview ? "Preview workspace cleared" : "Vault disconnected",
         detail: isPreview
           ? "Refresh to reload sample content, or open the desktop app for live access."
           : "Course context has been cleared from the current session.",
-      });
+      }, "Setup");
     });
 
   const saveCourse = () => {
     if (!courseDraft.name.trim() || !courseDraft.folder.trim()) {
-      setBanner({
+      showBanner({
         tone: "error",
         title: "Course details missing",
         detail: "Name and folder are required before saving a course.",
-      });
+      }, "Courses");
       return;
     }
 
@@ -417,11 +461,11 @@ function App() {
       }
 
       setActiveView("courses");
-      setBanner({
+      showBanner({
         tone: "success",
         title: input.id ? "Course updated" : "Course created",
         detail: input.name,
-      });
+      }, "Courses");
     });
   };
 
@@ -431,61 +475,61 @@ function App() {
       if (courseDraft.id === courseId) {
         setCourseDraft(createCourseDraft(next.courses[0] ?? undefined));
       }
-      setBanner({ tone: "neutral", title: "Course removed" });
+      showBanner({ tone: "neutral", title: "Course removed" }, "Courses");
     });
 
   const scan = () => {
-    setBanner({
+    showBanner({
       tone: "neutral",
       title: isPreview ? "Refreshing preview index" : `Scanning ${selectedCourse?.name ?? "course"}`,
       detail: isPreview
         ? "Refreshing the sample workspace."
         : "Reading markdown files, updating the index, and rebuilding links. The page refreshes when the scan finishes.",
-    });
+    }, "Overview");
 
     void runBusyTask("Scan failed", runScan, ({ workspace: next, report }) => {
       applyWorkspace(next);
       setScanReport(report);
       const aiStarted = next.dashboard?.ai.status === "running";
 
-      setBanner({
+      showBanner({
         tone: "success",
         title: isPreview ? "Preview index refreshed" : "Scan completed",
         detail: aiStarted
           ? `${report.changedNotes} changed, ${report.unchangedNotes} unchanged, ${report.generatedWeakLinks} weak-note suggestions. AI enrichment started in the background.`
           : `${report.changedNotes} changed, ${report.unchangedNotes} unchanged, ${report.generatedWeakLinks} weak-note suggestions.`,
-      });
+      }, "Overview");
     });
   };
 
   const validateAi = () =>
     void runBusyTask("AI validation failed", () => validateAiSettings(aiDraft), (result) => {
-      setBanner({
+      showBanner({
         tone: result.ok ? "success" : "error",
         title: result.ok ? "AI settings validated" : "AI settings rejected",
         detail: result.message,
-      });
+      }, "Setup");
     });
 
   const saveAi = () =>
     void runBusyTask("AI settings save failed", () => saveAiSettings(aiDraft), (next) => {
       applyWorkspace(next);
-      setBanner({
+      showBanner({
         tone: "success",
         title: "AI settings saved",
         detail: aiDraft.enabled
           ? "AI enrichment is armed. The app can start course enrichment after scans."
           : "Local extraction remains the active path.",
-      });
+      }, "Setup");
     });
 
   const beginCourseAiEnrichment = (force = false, nextCourseId = selectedCourseId) => {
     if (!nextCourseId) {
-      setBanner({
+      showBanner({
         tone: "error",
         title: "Course required",
         detail: "Choose a course before starting AI enrichment.",
-      });
+      }, "AI");
       return;
     }
 
@@ -498,22 +542,22 @@ function App() {
             ? { ...current, dashboard: { ...current.dashboard, ai: summary } }
             : current,
         );
-        setBanner({
+        showBanner({
           tone: "success",
           title: force ? "AI refresh started" : "AI enrichment started",
           detail: `${summary.pendingNotes || summary.missingNotes || summary.staleNotes} notes are being prepared in the background.`,
-        });
+        }, "AI");
       },
     );
   };
 
   const createFlashcards = () => {
     if (!selectedCourseId || selectedNoteIds.length === 0) {
-      setBanner({
+      showBanner({
         tone: "error",
         title: "Select notes first",
         detail: "Queue one or more notes from the Notes view before generating flashcards.",
-      });
+      }, "Outputs");
       return;
     }
 
@@ -528,22 +572,22 @@ function App() {
         }),
       (result) => {
         setFlashcardResult(result);
-        setBanner({
+        showBanner({
           tone: "success",
           title: "Flashcards generated",
           detail: `${result.cardCount} cards exported to markdown${result.csvPath ? " and CSV" : ""}.`,
-        });
+        }, "Outputs");
       },
     );
   };
 
   const createRevisionNote = () => {
     if (!selectedCourseId) {
-      setBanner({
+      showBanner({
         tone: "error",
         title: "Course required",
         detail: "Choose a course before generating the revision note.",
-      });
+      }, "Outputs");
       return;
     }
 
@@ -556,22 +600,22 @@ function App() {
         }),
       (result) => {
         setRevisionResult(result);
-        setBanner({
+        showBanner({
           tone: "success",
           title: "Revision note created",
           detail: result.notePath,
-        });
+        }, "Outputs");
       },
     );
   };
 
   const createNoteAiInsight = () => {
     if (!selectedNoteId) {
-      setBanner({
+      showBanner({
         tone: "error",
         title: "Select a note first",
         detail: "Choose a note in the Notes view before generating an AI study brief.",
-      });
+      }, "Notes");
       return;
     }
 
@@ -581,11 +625,11 @@ function App() {
           ? { ...current, aiInsight: result, aiStatus: "complete", aiError: null }
           : current,
       );
-      setBanner({
+      showBanner({
         tone: "success",
         title: "AI study brief ready",
         detail: result.summary,
-      });
+      }, "Notes");
     });
   };
 
@@ -595,6 +639,7 @@ function App() {
         activeView={activeView}
         connected={Boolean(workspace.vault)}
         courses={workspace.courses}
+        logCount={activityLog.length}
         runtimeMode={runtimeMode}
         selectedCourseId={selectedCourseId}
         vaultPath={workspace.vault?.vaultPath ?? ""}
@@ -625,6 +670,7 @@ function App() {
           <main className="content-pane">
             <MainPane
               activeView={activeView}
+              activityLog={activityLog}
               aiFilter={aiFilter}
               busyAction={busyAction}
               flashcardResult={flashcardResult}
@@ -643,6 +689,8 @@ function App() {
               onGenerateCourseAi={() => beginCourseAiEnrichment(false)}
               onRefreshCourseAi={() => beginCourseAiEnrichment(true)}
               onOpenNote={focusNote}
+              onOpenAiNote={(noteId) => focusNote(noteId, "ai")}
+              onApplyAiSelection={applyAiSelection}
               onSelectCourse={(courseId) => focusCourse(courseId, "courses")}
               onStartNewCourse={startNewCourse}
               onToggleNoteSelection={(noteId) =>
@@ -676,6 +724,13 @@ function App() {
               onDeleteCourse={removeCourse}
               onDisconnectVault={disconnect}
               onGenerateCourseAi={() => beginCourseAiEnrichment(false)}
+              onToggleNoteSelection={(noteId) =>
+                setSelectedNoteIds((current) =>
+                  current.includes(noteId)
+                    ? current.filter((entry) => entry !== noteId)
+                    : [...current, noteId],
+                )
+              }
               onResetCourseDraft={resetCourseDraft}
               onSaveAiSettings={saveAi}
               onSaveCourse={saveCourse}

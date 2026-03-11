@@ -1,0 +1,23 @@
+type BrandMarkProps = {
+  className?: string;
+  title?: string;
+};
+
+export function BrandMark({ className, title = "ObsidianOS logo" }: BrandMarkProps) {
+  return (
+    <svg
+      aria-label={title}
+      className={className}
+      role="img"
+      viewBox="0 0 1024 1024"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M512 152L672 268L736 736L512 816V152Z" fill="#F4F4F5" />
+      <path d="M512 152L432 268L400 736L512 816V152Z" fill="#D4D4D8" />
+      <path d="M432 268L512 152L672 268L512 424L432 268Z" fill="#E4E4E7" />
+      <path d="M512 424L672 268L736 736L512 816V424Z" fill="#EAEAEC" />
+      <path d="M512 424L432 268L400 736L512 816V424Z" fill="#CFCFD3" />
+      <path d="M408 728L592 316H623L438 728H408Z" fill="#0A0A0B" />
+    </svg>
+  );
+}

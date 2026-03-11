@@ -1,6 +1,7 @@
 import { formatDateTime } from "../lib";
 import type { AiCourseSummary, CourseConfig, DashboardData, ScanStatus } from "../types";
 import type { AppView } from "./appShell";
+import { BrandMark } from "./BrandMark";
 
 type TopbarProps = {
   activeView: AppView;
@@ -38,29 +39,37 @@ export function Topbar({
         ? selectedCourse
           ? `${selectedCourse.name} AI workspace`
           : "AI workspace"
-      : activeView === "notes"
-        ? selectedCourse
-          ? `${selectedCourse.name} notes`
-          : "Notes"
+        : activeView === "notes"
+          ? selectedCourse
+            ? `${selectedCourse.name} notes`
+            : "Notes"
         : title;
-  const statusLine = [
+  const statusItems = [
     isPreview ? "Preview" : "Desktop",
     selectedCourse ? dashboard?.countdown.label ?? "Course selected" : "No course selected",
     activeView === "ai" && aiStatus ? `AI ${aiStatus.status}` : null,
     scanStatus?.lastScanAt ? `Last scan ${formatDateTime(scanStatus.lastScanAt)}` : "No scan yet",
-  ]
-    .filter(Boolean)
-    .join("   ·   ");
+  ].filter(Boolean);
 
   return (
     <header className="topbar">
       <div className="topbar__copy">
+        <div className="topbar__brand">
+          <BrandMark className="brand-mark brand-mark--topbar" />
+          <span>ObsidianOS</span>
+        </div>
         <span className="topbar__eyebrow">
           {title}
           {selectedCourse ? <strong>{selectedCourse.folder}</strong> : null}
         </span>
         <h2>{headline}</h2>
-        <p>{statusLine}</p>
+        <div className="meta-pills">
+          {statusItems.map((item) => (
+            <span key={item} className="meta-pill">
+              {item}
+            </span>
+          ))}
+        </div>
       </div>
 
       <div className="topbar__meta">

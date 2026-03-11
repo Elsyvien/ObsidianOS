@@ -1,4 +1,8 @@
-# Obsidian Exam OS
+<p align="center">
+  <img src="./public/obsidianos-logo.svg" alt="ObsidianOS logo" width="120" />
+</p>
+
+# ObsidianOS
 
 Desktop study workspace for an Obsidian vault. The app scans course folders, indexes markdown notes into a local graph, surfaces weakly linked notes, generates flashcards, and writes a daily revision note back into the vault.
 

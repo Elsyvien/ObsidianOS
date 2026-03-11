@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { buildNoteCoach } from "../aiWorkbench";
 import { formatDate, formatDateTime, shortenPath, type CourseDraft } from "../lib";
 import type {
   AiSettingsInput,
@@ -10,6 +11,7 @@ import type {
   WorkspaceSnapshot,
 } from "../types";
 import type { AppView } from "./appShell";
+import { MathFormula } from "./MathFormula";
 
 type EditableCourseField = "name" | "folder" | "examDate" | "revisionFolder" | "flashcardsFolder";
 
@@ -35,6 +37,7 @@ type InspectorPaneProps = {
   onDisconnectVault: () => void;
   onGenerateCourseAi: () => void;
   onGenerateNoteAiInsight: () => void;
+  onToggleNoteSelection: (noteId: string) => void;
   onResetCourseDraft: () => void;
   onSaveAiSettings: () => void;
   onSaveCourse: () => void;
@@ -66,6 +69,7 @@ export function InspectorPane({
   onDisconnectVault,
   onGenerateCourseAi,
   onGenerateNoteAiInsight,
+  onToggleNoteSelection,
   onResetCourseDraft,
   onSaveAiSettings,
   onSaveCourse,
@@ -76,6 +80,7 @@ export function InspectorPane({
 }: InspectorPaneProps) {
   const isPreview = runtimeMode === "browser-preview";
   const dashboard = workspace.dashboard;
+  const noteCoach = buildNoteCoach(noteDetails);
 
   return (
     <aside className="inspector-pane">
@@ -147,6 +152,20 @@ export function InspectorPane({
             {workspace.dashboard?.ai.summary ? (
               <>
                 <p className="inspector-copy">{workspace.dashboard.ai.summary}</p>
+                <dl className="inspector-grid">
+                  <InspectorItem
+                    label="Updated"
+                    value={
+                      workspace.dashboard.ai.updatedAt
+                        ? formatDateTime(workspace.dashboard.ai.updatedAt)
+                        : "Not available"
+                    }
+                  />
+                  <InspectorItem
+                    label="Missing or stale"
+                    value={String(workspace.dashboard.ai.missingNotes + workspace.dashboard.ai.staleNotes)}
+                  />
+                </dl>
                 {workspace.dashboard.ai.lastError ? (
                   <p className="inspector-copy">{workspace.dashboard.ai.lastError}</p>
                 ) : null}
@@ -164,13 +183,73 @@ export function InspectorPane({
                 <dl className="inspector-grid">
                   <InspectorItem label="AI state" value={noteDetails.aiStatus} />
                   <InspectorItem label="Path" value={shortenPath(noteDetails.relativePath)} />
+                  <InspectorItem
+                    label="Queued"
+                    value={selectedNoteIds.includes(noteDetails.id) ? "Yes" : "No"}
+                  />
+                  <InspectorItem
+                    label="Updated"
+                    value={
+                      noteDetails.aiInsight?.generatedAt
+                        ? formatDateTime(noteDetails.aiInsight.generatedAt)
+                        : "No brief yet"
+                    }
+                  />
                 </dl>
                 {noteDetails.aiError ? <p className="inspector-copy">{noteDetails.aiError}</p> : null}
+                <div className="button-row">
+                  <button
+                    className="button button--subtle"
+                    disabled={busyAction !== null}
+                    onClick={onGenerateNoteAiInsight}
+                    type="button"
+                  >
+                    {busyAction === "AI note insight failed"
+                      ? "Generating..."
+                      : noteDetails.aiInsight
+                        ? "Refresh AI brief"
+                        : "Generate AI brief"}
+                  </button>
+                  <button
+                    className={`button button--ghost ${selectedNoteIds.includes(noteDetails.id) ? "button--active" : ""}`}
+                    onClick={() => onToggleNoteSelection(noteDetails.id)}
+                    type="button"
+                  >
+                    {selectedNoteIds.includes(noteDetails.id) ? "Remove from queue" : "Queue note"}
+                  </button>
+                </div>
+                {noteDetails.aiInsight ? (
+                  <div className="insight-stack">
+                    <p className="inspector-copy">{noteDetails.aiInsight.summary}</p>
+                    <InsightList
+                      items={noteDetails.aiInsight.takeaways}
+                      title="Takeaways"
+                    />
+                    <InsightList
+                      items={noteDetails.aiInsight.examQuestions}
+                      title="Exam questions"
+                    />
+                  </div>
+                ) : (
+                  <p className="inspector-copy">
+                    Generate the note brief here without leaving the AI workspace.
+                  </p>
+                )}
               </>
             ) : (
               <p className="inspector-copy">Select a note from the AI queue to review its current status and brief.</p>
             )}
           </InspectorSection>
+
+          {noteCoach ? (
+            <InspectorSection eyebrow="Study coach" title="Use the note actively">
+              <p className="inspector-copy">{noteCoach.nextMove}</p>
+              <TokenList items={noteCoach.memoryAnchors} emptyLabel="No quick anchors yet" />
+              <InsightList items={noteCoach.recallPrompts} title="Say this out loud" />
+              <InsightList items={noteCoach.flashcardSeeds} title="Flashcard seeds" />
+              <InsightList items={noteCoach.bridgeTargets} title="Connection targets" />
+            </InspectorSection>
+          ) : null}
         </>
       ) : null}
 
@@ -286,7 +365,7 @@ export function InspectorPane({
                 <TokenList items={noteDetails.suggestions} emptyLabel="No link suggestions" />
               </InspectorSection>
               <InspectorSection eyebrow="AI study coach" title="Exam brief">
-                {workspace.aiSettings?.enabled && hasSavedApiKey ? (
+                {workspace.aiSettings?.enabled ? (
                   <>
                     <dl className="inspector-grid inspector-grid--single">
                       <InspectorItem label="Status" value={noteDetails.aiStatus} />
@@ -540,9 +619,13 @@ function TokenList({
     <div className="token-list">
       {items.map((item) =>
         code ? (
-          <code key={item} className="token-list__item token-list__item--code">
-            {item}
-          </code>
+          <MathFormula
+            key={item}
+            className="token-list__item token-list__item--math"
+            latex={item}
+            showSource={false}
+            sourceClassName="math-formula__source token-list__source"
+          />
         ) : (
           <span key={item} className="token-list__item">
             {item}

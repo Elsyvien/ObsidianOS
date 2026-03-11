@@ -1,10 +1,16 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
+  ApplyExamReviewActionsRequest,
   AiCourseSummary,
   AiNoteInsight,
   AiSettingsInput,
   CourseConfigInput,
   DashboardData,
+  ExamAttemptResult,
+  ExamBuilderInput,
+  ExamDetails,
+  ExamSubmissionRequest,
+  ExamWorkspaceSnapshot,
   FlashcardGenerationRequest,
   FlashcardGenerationResult,
   NoteDetails,
@@ -15,12 +21,19 @@ import type {
   WorkspaceSnapshot,
 } from "./types";
 import {
+  addExamSourceNotesMock,
+  applyExamReviewActionsMock,
+  clearExamSourceQueueMock,
   connectVaultMock,
   deleteCourseMock,
   disconnectVaultMock,
+  getExamDetailsMock,
+  getExamWorkspaceMock,
   generateFlashcardsMock,
   generateNoteAiInsightMock,
   generateRevisionNoteMock,
+  queueExamsMock,
+  removeExamSourceNotesMock,
   getDashboardMock,
   getNoteDetailsMock,
   loadWorkspaceMock,
@@ -28,6 +41,7 @@ import {
   saveAiSettingsMock,
   saveCourseConfigMock,
   startAiEnrichmentMock,
+  submitExamAttemptMock,
   validateAiSettingsMock,
 } from "./mockApi";
 
@@ -123,4 +137,44 @@ export function generateFlashcards(request: FlashcardGenerationRequest) {
 export function generateRevisionNote(request: RevisionNoteRequest) {
   if (!isTauriRuntime()) return generateRevisionNoteMock(request);
   return invoke<RevisionNoteResult>("generate_revision_note", { request });
+}
+
+export function getExamWorkspace(courseId: string | null) {
+  if (!isTauriRuntime()) return getExamWorkspaceMock(courseId);
+  return invoke<ExamWorkspaceSnapshot | null>("get_exam_workspace", { courseId });
+}
+
+export function addExamSourceNotes(courseId: string, noteIds: string[]) {
+  if (!isTauriRuntime()) return addExamSourceNotesMock(courseId, noteIds);
+  return invoke<ExamWorkspaceSnapshot>("add_exam_source_notes", { courseId, noteIds });
+}
+
+export function removeExamSourceNotes(courseId: string, noteIds: string[]) {
+  if (!isTauriRuntime()) return removeExamSourceNotesMock(courseId, noteIds);
+  return invoke<ExamWorkspaceSnapshot>("remove_exam_source_notes", { courseId, noteIds });
+}
+
+export function clearExamSourceQueue(courseId: string) {
+  if (!isTauriRuntime()) return clearExamSourceQueueMock(courseId);
+  return invoke<ExamWorkspaceSnapshot>("clear_exam_source_queue", { courseId });
+}
+
+export function queueExams(request: ExamBuilderInput) {
+  if (!isTauriRuntime()) return queueExamsMock(request);
+  return invoke<ExamWorkspaceSnapshot>("queue_exams", { request });
+}
+
+export function getExamDetails(examId: string) {
+  if (!isTauriRuntime()) return getExamDetailsMock(examId);
+  return invoke<ExamDetails>("get_exam_details", { examId });
+}
+
+export function submitExamAttempt(request: ExamSubmissionRequest) {
+  if (!isTauriRuntime()) return submitExamAttemptMock(request);
+  return invoke<ExamAttemptResult>("submit_exam_attempt", { request });
+}
+
+export function applyExamReviewActions(request: ApplyExamReviewActionsRequest) {
+  if (!isTauriRuntime()) return applyExamReviewActionsMock(request);
+  return invoke<ExamWorkspaceSnapshot>("apply_exam_review_actions", { request });
 }

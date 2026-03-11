@@ -1,12 +1,25 @@
 import type {
+  ApplyExamReviewActionsRequest,
   AiCourseSummary,
   AiNoteInsight,
   AiSettingsInput,
   CourseConfig,
   CourseConfigInput,
   DashboardData,
+  ExamAttemptResult,
+  ExamBuilderInput,
+  ExamDefaults,
+  ExamDetails,
+  ExamQuestion,
+  ExamQuestionResult,
+  ExamReviewSuggestion,
+  ExamSourceNote,
+  ExamSubmissionRequest,
+  ExamSummary,
+  ExamWorkspaceSnapshot,
   FlashcardGenerationRequest,
   FlashcardGenerationResult,
+  NoteMasteryState,
   NoteDetails,
   NoteSummary,
   RevisionNoteRequest,
@@ -21,6 +34,23 @@ type MockState = {
   notesByCourse: Record<string, NoteDetails[]>;
   flashcardRuns: Record<string, FlashcardGenerationResult[]>;
   revisionRuns: Record<string, RevisionNoteResult[]>;
+  examSourceQueue: Record<string, string[]>;
+  examsByCourse: Record<string, MockExamRecord[]>;
+  noteMastery: Record<string, NoteMasteryState>;
+  noteAccuracy: Record<string, number | null>;
+};
+
+type MockExamRecord = ExamDetails & {
+  latestScorePercent: number | null;
+  attempts: ExamAttemptResult[];
+  gradingKeys: Record<
+    string,
+    {
+      expectedAnswer: string;
+      keyword: string;
+      explanation: string;
+    }
+  >;
 };
 
 type DemoBlueprint = {
@@ -46,6 +76,34 @@ const state: MockState = {
   notesByCourse: {},
   flashcardRuns: {},
   revisionRuns: {},
+  examSourceQueue: {},
+  examsByCourse: {},
+  noteMastery: {},
+  noteAccuracy: {},
+};
+
+const EXAM_PRESET_DEFAULTS: Record<ExamDefaults["preset"], Omit<ExamDefaults, "preset">> = {
+  sprint: {
+    multipleChoiceCount: 6,
+    shortAnswerCount: 2,
+    difficulty: "mixed",
+    timeLimitMinutes: 10,
+    generateCount: 1,
+  },
+  mock: {
+    multipleChoiceCount: 14,
+    shortAnswerCount: 6,
+    difficulty: "mixed",
+    timeLimitMinutes: 25,
+    generateCount: 1,
+  },
+  final: {
+    multipleChoiceCount: 24,
+    shortAnswerCount: 16,
+    difficulty: "hard",
+    timeLimitMinutes: 45,
+    generateCount: 1,
+  },
 };
 
 export async function loadWorkspaceMock() {
@@ -74,6 +132,10 @@ export async function disconnectVaultMock() {
   state.notesByCourse = {};
   state.flashcardRuns = {};
   state.revisionRuns = {};
+  state.examSourceQueue = {};
+  state.examsByCourse = {};
+  state.noteMastery = {};
+  state.noteAccuracy = {};
   return clone(state.workspace);
 }
 
@@ -114,6 +176,7 @@ export async function saveCourseConfigMock(input: CourseConfigInput) {
     nextCourse,
   ].sort((left, right) => left.name.localeCompare(right.name));
   state.notesByCourse[id] = blueprint.notes;
+  seedExamQueue(id);
   state.workspace.selectedCourseId = id;
   state.workspace.dashboard = buildDashboard(id);
   return clone(state.workspace);
@@ -124,6 +187,8 @@ export async function deleteCourseMock(courseId: string) {
   delete state.notesByCourse[courseId];
   delete state.flashcardRuns[courseId];
   delete state.revisionRuns[courseId];
+  delete state.examSourceQueue[courseId];
+  delete state.examsByCourse[courseId];
   state.workspace.selectedCourseId = state.workspace.courses[0]?.id ?? null;
   state.workspace.dashboard = state.workspace.selectedCourseId
     ? buildDashboard(state.workspace.selectedCourseId)
@@ -145,6 +210,7 @@ export async function runScanMock() {
 
   const seededNotes = buildBlueprint(course).notes;
   state.notesByCourse[courseId] = seededNotes;
+  seedExamQueue(courseId);
   const dashboard = buildDashboard(courseId);
   state.workspace.dashboard = dashboard;
   state.workspace.scanStatus = {
@@ -318,6 +384,195 @@ export async function generateRevisionNoteMock(request: RevisionNoteRequest) {
   state.revisionRuns[request.courseId] = [result, ...(state.revisionRuns[request.courseId] ?? [])];
   state.workspace.dashboard = buildDashboard(request.courseId);
   return result;
+}
+
+export async function getExamWorkspaceMock(courseId: string | null) {
+  ensureDemoWorkspace();
+  const selectedCourseId = courseId ?? state.workspace.selectedCourseId ?? state.workspace.courses[0]?.id ?? null;
+  if (!selectedCourseId) {
+    return null;
+  }
+
+  ensureExamCourseState(selectedCourseId);
+  return clone(buildExamWorkspace(selectedCourseId));
+}
+
+export async function addExamSourceNotesMock(courseId: string, noteIds: string[]) {
+  ensureDemoWorkspace();
+  ensureExamCourseState(courseId);
+  const availableNoteIds = new Set((state.notesByCourse[courseId] ?? []).map((note) => note.id));
+  const nextQueue = new Set(state.examSourceQueue[courseId] ?? []);
+  for (const noteId of noteIds) {
+    if (availableNoteIds.has(noteId)) {
+      nextQueue.add(noteId);
+    }
+  }
+  state.examSourceQueue[courseId] = Array.from(nextQueue);
+  return clone(buildExamWorkspace(courseId));
+}
+
+export async function removeExamSourceNotesMock(courseId: string, noteIds: string[]) {
+  ensureDemoWorkspace();
+  ensureExamCourseState(courseId);
+  const removal = new Set(noteIds);
+  state.examSourceQueue[courseId] = (state.examSourceQueue[courseId] ?? []).filter((noteId) => !removal.has(noteId));
+  return clone(buildExamWorkspace(courseId));
+}
+
+export async function clearExamSourceQueueMock(courseId: string) {
+  ensureDemoWorkspace();
+  ensureExamCourseState(courseId);
+  state.examSourceQueue[courseId] = [];
+  return clone(buildExamWorkspace(courseId));
+}
+
+export async function queueExamsMock(request: ExamBuilderInput) {
+  ensureDemoWorkspace();
+  ensureExamCourseState(request.courseId);
+
+  if (!state.workspace.aiSettings?.enabled) {
+    throw new Error("Enable AI in Setup before generating exams.");
+  }
+
+  const sourceQueue = state.examSourceQueue[request.courseId] ?? [];
+  if (!sourceQueue.length) {
+    throw new Error("Add one or more notes to the exam source queue first.");
+  }
+
+  const generateCount = Math.max(1, Math.min(5, request.generateCount || 1));
+  const exams = state.examsByCourse[request.courseId] ?? [];
+
+  for (let index = 0; index < generateCount; index += 1) {
+    exams.unshift(createQueuedExamRecord(request.courseId, request, exams.length + index));
+  }
+
+  state.examsByCourse[request.courseId] = exams;
+  startExamGenerationLoop(request.courseId);
+  return clone(buildExamWorkspace(request.courseId));
+}
+
+export async function getExamDetailsMock(examId: string) {
+  ensureDemoWorkspace();
+  const record = findExamRecord(examId);
+  if (!record) {
+    throw new Error("Exam not found.");
+  }
+  return clone(stripExamRecord(record));
+}
+
+export async function submitExamAttemptMock(request: ExamSubmissionRequest) {
+  ensureDemoWorkspace();
+  const record = findExamRecord(request.examId);
+  if (!record || record.status !== "ready") {
+    throw new Error("Exam is not ready yet.");
+  }
+
+  const answers = new Map(request.answers.map((entry) => [entry.questionId, entry.answer]));
+  const noteScores = new Map<string, { correct: number; total: number }>();
+  const questionResults: ExamQuestionResult[] = record.questions.map((question) => {
+    const key = record.gradingKeys[question.id];
+    const userAnswer = answers.get(question.id) ?? (question.type === "multiple-choice" ? "" : "");
+    const verdict = scoreExamAnswer(question, userAnswer, key.keyword, key.expectedAnswer);
+    const result: ExamQuestionResult = {
+      questionId: question.id,
+      index: question.index,
+      type: question.type,
+      prompt: question.prompt,
+      options: question.options,
+      sourceNoteId: question.sourceNoteId,
+      sourceNoteTitle: question.sourceNoteTitle,
+      userAnswer,
+      verdict,
+      isCorrect: verdict === "correct",
+      expectedAnswer: key.expectedAnswer,
+      explanation: key.explanation,
+      feedback:
+        verdict === "correct"
+          ? "Correct. Keep this idea in your active recall rotation."
+          : verdict === "partial"
+            ? "Partly right. Tighten the wording and the exact definition."
+            : "Incorrect. Bring this note back into focused review.",
+    };
+
+    const noteScore = noteScores.get(question.sourceNoteId) ?? { correct: 0, total: 0 };
+    noteScore.total += 1;
+    if (verdict === "correct") {
+      noteScore.correct += 1;
+    } else if (verdict === "partial") {
+      noteScore.correct += 0.5;
+    }
+    noteScores.set(question.sourceNoteId, noteScore);
+    return result;
+  });
+
+  const correctCount = questionResults.filter((result) => result.verdict === "correct").length;
+  const partialCount = questionResults.filter((result) => result.verdict === "partial").length;
+  const incorrectCount = questionResults.length - correctCount - partialCount;
+  const scorePercent = Math.round(((correctCount + partialCount * 0.5) / Math.max(questionResults.length, 1)) * 100);
+
+  const noteSuggestions = Array.from(noteScores.entries()).map(([noteId, score]) => {
+    const accuracy = Math.round((score.correct / Math.max(score.total, 1)) * 100);
+    state.noteAccuracy[noteId] = accuracy;
+    const recommendedState: NoteMasteryState =
+      accuracy >= 80 ? "mastered" : accuracy < 60 ? "review" : "active";
+    const note = lookupNote(noteId);
+
+    return {
+      noteId,
+      title: note?.title ?? "Unknown note",
+      relativePath: note?.relativePath ?? "",
+      recommendedState,
+      accuracy,
+      reason:
+        recommendedState === "mastered"
+          ? "High accuracy in this attempt. You can safely put this note away for now."
+          : recommendedState === "review"
+            ? "Low accuracy in this attempt. Bring this note back into the learning queue."
+            : "Mixed performance. Keep this note active until recall stabilizes.",
+      currentlyInSourceQueue: (state.examSourceQueue[record.courseId] ?? []).includes(noteId),
+    } satisfies ExamReviewSuggestion;
+  });
+
+  const attempt: ExamAttemptResult = {
+    examId: record.id,
+    attemptId: `attempt-${crypto.randomUUID()}`,
+    submittedAt: now(),
+    scorePercent,
+    correctCount,
+    partialCount,
+    incorrectCount,
+    overallFeedback:
+      scorePercent >= 80
+        ? "Strong result. You can retire the clean notes and queue one harder mixed exam next."
+        : scorePercent >= 60
+          ? "Decent base, but the weaker notes still need another pass before you compress the material."
+          : "This exam exposed real gaps. Move the missed notes into review and retry a shorter exam.",
+    questionResults,
+    noteSuggestions,
+  };
+
+  record.attempts.unshift(attempt);
+  record.latestScorePercent = attempt.scorePercent;
+  return clone(attempt);
+}
+
+export async function applyExamReviewActionsMock(request: ApplyExamReviewActionsRequest) {
+  ensureDemoWorkspace();
+  const record = findExamRecordByAttempt(request.attemptId);
+  if (!record) {
+    throw new Error("Exam attempt not found.");
+  }
+
+  ensureExamCourseState(record.courseId);
+  const sourceQueue = new Set(state.examSourceQueue[record.courseId] ?? []);
+  for (const action of request.actions) {
+    state.noteMastery[action.noteId] = action.nextState;
+    if (action.addToExamQueue) {
+      sourceQueue.add(action.noteId);
+    }
+  }
+  state.examSourceQueue[record.courseId] = Array.from(sourceQueue);
+  return clone(buildExamWorkspace(record.courseId));
 }
 
 function buildDashboard(courseId: string): DashboardData {

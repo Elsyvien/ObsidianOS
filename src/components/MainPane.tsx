@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
+import { buildAiWorkbench, getAiRecommendationLabel } from "../aiWorkbench";
 import { clampPercent, formatDate, formatDateTime } from "../lib";
 import type {
+  ActivityLogEntry,
   CourseConfig,
   FlashcardGenerationResult,
   RevisionNoteResult,
@@ -8,11 +10,13 @@ import type {
   WorkspaceSnapshot,
 } from "../types";
 import type { AppView, NoteFilter } from "./appShell";
+import { MathFormula } from "./MathFormula";
 
 type AiFilter = "all" | "ready" | "needs-work" | "failed";
 
 type MainPaneProps = {
   activeView: AppView;
+  activityLog: ActivityLogEntry[];
   aiFilter: AiFilter;
   busyAction: string | null;
   flashcardResult: FlashcardGenerationResult | null;
@@ -30,6 +34,8 @@ type MainPaneProps = {
   onGenerateCourseAi: () => void;
   onGenerateFlashcards: () => void;
   onOpenNote: (noteId: string) => void;
+  onOpenAiNote: (noteId: string) => void;
+  onApplyAiSelection: (noteIds: string[], label: string, mode?: "append" | "replace") => void;
   onRefreshCourseAi: () => void;
   onSelectCourse: (courseId: string) => void;
   onStartNewCourse: () => void;
@@ -38,6 +44,7 @@ type MainPaneProps = {
 
 export function MainPane({
   activeView,
+  activityLog,
   aiFilter,
   busyAction,
   flashcardResult,
@@ -55,6 +62,8 @@ export function MainPane({
   onGenerateCourseAi,
   onGenerateFlashcards,
   onOpenNote,
+  onOpenAiNote,
+  onApplyAiSelection,
   onRefreshCourseAi,
   onSelectCourse,
   onStartNewCourse,
@@ -80,6 +89,7 @@ export function MainPane({
       return true;
     }) ?? [];
   const selectedQueue = dashboard?.notes.filter((note) => selectedNoteIds.includes(note.id)) ?? [];
+  const aiWorkbench = buildAiWorkbench(dashboard);
   const scanNotice = isScanning ? (
     <section className="surface surface--status">
       <span className="surface__eyebrow">Indexing</span>
@@ -319,7 +329,72 @@ export function MainPane({
     );
   }
 
+  if (activeView === "logs") {
+    const successCount = activityLog.filter((entry) => entry.tone === "success").length;
+    const errorCount = activityLog.filter((entry) => entry.tone === "error").length;
+
+    return (
+      <div className="page-stack">
+        {scanNotice}
+        <section className="surface surface--hero">
+          <div className="surface__header">
+            <div>
+              <span className="surface__eyebrow">Activity log</span>
+              <h3>Session event stream</h3>
+            </div>
+          </div>
+          <p className="surface__summary">
+            Every scan, save, AI run, export, and runtime warning lands here so you can trace what the app
+            actually did.
+          </p>
+          <div className="metric-strip">
+            <Metric label="Events" value={String(activityLog.length)} />
+            <Metric label="Success" value={String(successCount)} />
+            <Metric label="Errors" value={String(errorCount)} />
+            <Metric label="Course" value={selectedCourse?.name ?? "None"} />
+          </div>
+        </section>
+
+        <section className="surface">
+          <div className="surface__header">
+            <div>
+              <span className="surface__eyebrow">Timeline</span>
+              <h3>Latest events</h3>
+            </div>
+          </div>
+          {activityLog.length ? (
+            <div className="log-table">
+              <div className="log-table__head">
+                <span>Timestamp</span>
+                <span>Scope</span>
+                <span>Event</span>
+                <span>Detail</span>
+              </div>
+              <div className="log-table__body">
+                {activityLog.map((entry) => (
+                  <article key={entry.id} className={`log-row log-row--${entry.tone}`}>
+                    <span className="log-cell log-cell--timestamp">{formatDateTime(entry.timestamp)}</span>
+                    <span className="log-cell log-cell--scope">{entry.scope}</span>
+                    <span className="log-cell log-cell--event">{entry.title}</span>
+                    <span className="log-cell log-cell--detail">{entry.detail || "No additional detail"}</span>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <EmptyState
+              title="No session events yet"
+              description="Start scanning, saving settings, or running AI to build the activity stream."
+            />
+          )}
+        </section>
+      </div>
+    );
+  }
+
   if (activeView === "ai") {
+    const weakNoteIds = new Set(dashboard?.weakNotes.map((note) => note.noteId) ?? []);
+
     return (
       <div className="page-stack">
         {scanNotice}
@@ -358,6 +433,64 @@ export function MainPane({
             <Metric label="Stale" value={String(dashboard?.ai.staleNotes ?? 0)} />
           </div>
         </section>
+
+        {aiWorkbench ? (
+          <section className="surface surface--split">
+            <div>
+              <div className="surface__header">
+                <div>
+                  <span className="surface__eyebrow">AI posture</span>
+                  <h3>How usable the AI layer is right now</h3>
+                </div>
+              </div>
+              <div className="metric-strip">
+                <Metric label="Readiness" value={`${aiWorkbench.signals.readinessScore}%`} />
+                <Metric label="Exam mode" value={aiWorkbench.signals.examMode} />
+                <Metric label="Coverage" value={aiWorkbench.signals.insightDensity} />
+              </div>
+              <dl className="definition-grid">
+                <Definition label="Flashcard potential" value={aiWorkbench.signals.flashcardPotential} />
+                <Definition label="Cadence" value={aiWorkbench.signals.cadence} />
+                <Definition label="Checkpoint" value={aiWorkbench.signals.checkpoint} />
+                <Definition
+                  label="Queue state"
+                  value={`${dashboard?.ai.pendingNotes ?? 0} pending · ${dashboard?.ai.failedNotes ?? 0} failed`}
+                />
+              </dl>
+            </div>
+
+            <div>
+              <div className="surface__header">
+                <div>
+                  <span className="surface__eyebrow">Command deck</span>
+                  <h3>Turn the brief into actions</h3>
+                </div>
+              </div>
+              <div className="action-list">
+                {aiWorkbench.presets.map((preset) => (
+                  <ActionRow
+                    key={preset.id}
+                    action={
+                      <button
+                        className="button button--subtle"
+                        disabled={busyAction !== null || preset.noteIds.length === 0}
+                        onClick={() => onApplyAiSelection(preset.noteIds, preset.title, preset.mode)}
+                        type="button"
+                      >
+                        {preset.buttonLabel}
+                      </button>
+                    }
+                    eyebrow="Preset"
+                    meta={preset.stat}
+                    title={preset.title}
+                  >
+                    {preset.description}
+                  </ActionRow>
+                ))}
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         <section className="surface">
           <div className="surface__header">
@@ -430,6 +563,39 @@ export function MainPane({
           )}
         </section>
 
+        {aiWorkbench ? (
+          <section className="surface">
+            <div className="surface__header">
+              <div>
+                <span className="surface__eyebrow">Study lanes</span>
+                <h3>Three useful ways to work the course</h3>
+              </div>
+            </div>
+            <div className="action-list">
+              {aiWorkbench.lanes.map((lane) => (
+                <ActionRow
+                  key={lane.id}
+                  action={
+                    <button
+                      className="button button--ghost"
+                      disabled={busyAction !== null || lane.noteIds.length === 0}
+                      onClick={() => onApplyAiSelection(lane.noteIds, lane.title, "replace")}
+                      type="button"
+                    >
+                      {lane.buttonLabel}
+                    </button>
+                  }
+                  eyebrow="Lane"
+                  meta={`${lane.items.length} notes`}
+                  title={lane.title}
+                >
+                  {lane.summary}
+                </ActionRow>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         <section className="surface">
           <div className="surface__header">
             <div>
@@ -441,11 +607,14 @@ export function MainPane({
             <div className="row-list row-list--compact">
               {aiNotes.map((note) => (
                 <article key={note.id} className={`row-item ${selectedNoteId === note.id ? "row-item--active" : ""}`}>
-                  <button className="row-item__main" onClick={() => onOpenNote(note.id)} type="button">
+                  <button className="row-item__main" onClick={() => onOpenAiNote(note.id)} type="button">
                     <div className="row-item__title-row">
                       <span className="row-item__title">{note.title}</span>
                       <span className={`soft-badge soft-badge--${aiStatusTone(note.aiStatus)}`}>
                         {aiStatusLabel(note.aiStatus)}
+                      </span>
+                      <span className="soft-badge soft-badge--neutral">
+                        {getAiRecommendationLabel(note, weakNoteIds.has(note.id))}
                       </span>
                     </div>
                     <span className="row-item__subtitle">{note.relativePath}</span>
@@ -455,6 +624,14 @@ export function MainPane({
                     <span>{note.conceptCount} concepts</span>
                     <span>{note.formulaCount} formulas</span>
                   </div>
+                  <button
+                    aria-pressed={selectedNoteIds.includes(note.id)}
+                    className={`button button--ghost ${selectedNoteIds.includes(note.id) ? "button--active" : ""}`}
+                    onClick={() => onToggleNoteSelection(note.id)}
+                    type="button"
+                  >
+                    {selectedNoteIds.includes(note.id) ? "Queued" : "Queue"}
+                  </button>
                 </article>
               ))}
             </div>
@@ -799,7 +976,12 @@ export function MainPane({
             <div className="line-list">
               {dashboard.formulas.map((formula) => (
                 <div key={formula.latex} className="line-item line-item--static">
-                  <code className="line-item__title line-item__code">{formula.latex}</code>
+                  <MathFormula
+                    className="line-item__math"
+                    latex={formula.latex}
+                    showSource={false}
+                    sourceClassName="math-formula__source line-item__title line-item__code"
+                  />
                   <span className="line-item__meta">{formula.noteCount} notes</span>
                 </div>
               ))}

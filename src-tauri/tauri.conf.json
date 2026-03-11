@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Obsidian Exam OS",
+  "productName": "ObsidianOS",
   "version": "0.1.0",
   "identifier": "com.maxwi.obsidianexamos",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Obsidian Exam OS",
+        "title": "ObsidianOS",
         "width": 1540,
         "height": 980,
         "minWidth": 1200,
