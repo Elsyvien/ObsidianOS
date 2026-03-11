@@ -1,10 +1,11 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   ArrowDownToLine,
   BarChart2,
   BookOpen,
   BrainCircuit,
   ChartNoAxesCombined,
+  ChevronDown,
   ClipboardCheck,
   FolderGit2,
   MessageSquareMore,
@@ -31,6 +32,16 @@ const VIEW_ICONS: Record<AppView, React.ElementType> = {
   settings: Settings,
 };
 
+/** Sub-groups inside the Study section. */
+const NAV_GROUPS: Array<{ label: string; views: AppView[] }> = [
+  { label: "Dashboard", views: ["overview", "statistics"] },
+  { label: "Content",   views: ["notes", "formulas"] },
+  { label: "AI & Study", views: ["ai", "chat", "exams"] },
+  { label: "Generate",  views: ["outputs", "logs"] },
+];
+
+const CONFIG_VIEWS: AppView[] = ["courses", "settings"];
+
 type AppSidebarProps = {
   activeView: AppView;
   connected: boolean;
@@ -43,9 +54,6 @@ type AppSidebarProps = {
   onSelectCourse: (courseId: string) => void;
 };
 
-const STUDY_VIEWS: AppView[] = ["overview", "statistics", "notes", "formulas", "ai", "exams", "chat", "outputs", "logs"];
-const CONFIG_VIEWS: AppView[] = ["courses", "settings"];
-
 export function AppSidebar({
   activeView,
   courses,
@@ -54,6 +62,9 @@ export function AppSidebar({
   onChangeView,
   onSelectCourse,
 }: AppSidebarProps) {
+  // Auto-expand the group that contains the active view
+  const activeGroupLabel = NAV_GROUPS.find((g) => g.views.includes(activeView))?.label ?? "";
+
   return (
     <aside className="sidebar">
       <div className="sidebar__brand">
@@ -65,27 +76,39 @@ export function AppSidebar({
         </div>
       </div>
 
-      <SidebarGroup label="Study">
-        {APP_VIEWS.filter((view) => STUDY_VIEWS.includes(view.id)).map((view) => {
-          const Icon = VIEW_ICONS[view.id];
-          return (
-            <button
-              key={view.id}
-              className={`nav-item ${activeView === view.id ? "nav-item--active" : ""}`}
-              onClick={() => onChangeView(view.id)}
-              type="button"
-            >
-              <span className="nav-item__label">
-                <Icon size={16} strokeWidth={1.5} />
-                {view.label}
-              </span>
-              {view.id === "logs" ? <span className="nav-item__badge">{logCount}</span> : null}
-            </button>
-          );
-        })}
-      </SidebarGroup>
+      {/* ── Study nav (grouped) ───────────────── */}
+      <SidebarSection label="Study">
+        {NAV_GROUPS.map((group) => (
+          <NavGroup
+            key={group.label}
+            label={group.label}
+            defaultOpen={group.label === activeGroupLabel}
+          >
+            {group.views.map((viewId) => {
+              const view = APP_VIEWS.find((v) => v.id === viewId);
+              if (!view) return null;
+              const Icon = VIEW_ICONS[view.id];
+              return (
+                <button
+                  key={view.id}
+                  className={`nav-item ${activeView === view.id ? "nav-item--active" : ""}`}
+                  onClick={() => onChangeView(view.id)}
+                  type="button"
+                >
+                  <span className="nav-item__label">
+                    <Icon size={15} strokeWidth={1.6} />
+                    {view.label}
+                  </span>
+                  {view.id === "logs" ? <span className="nav-item__badge">{logCount}</span> : null}
+                </button>
+              );
+            })}
+          </NavGroup>
+        ))}
+      </SidebarSection>
 
-      <SidebarGroup label="Configure">
+      {/* ── Configure nav ──────────────────────── */}
+      <SidebarSection label="Configure">
         {APP_VIEWS.filter((view) => CONFIG_VIEWS.includes(view.id)).map((view) => {
           const Icon = VIEW_ICONS[view.id];
           return (
@@ -96,21 +119,22 @@ export function AppSidebar({
               type="button"
             >
               <span className="nav-item__label">
-                <Icon size={16} strokeWidth={1.5} />
+                <Icon size={15} strokeWidth={1.6} />
                 {view.label}
               </span>
             </button>
           );
         })}
-      </SidebarGroup>
+      </SidebarSection>
 
-      <SidebarGroup
+      {/* ── Course library ─────────────────────── */}
+      <SidebarSection
+        label="Course library"
         action={
           <button className="sidebar__link" onClick={() => onChangeView("courses")} type="button">
             Manage
           </button>
         }
-        label="Course library"
       >
         {courses.length === 0 ? (
           <div className="sidebar__empty">
@@ -146,12 +170,15 @@ export function AppSidebar({
             })}
           </div>
         )}
-      </SidebarGroup>
+      </SidebarSection>
     </aside>
   );
 }
 
-function SidebarGroup({
+/* ── Shared components ────────────────────────────── */
+
+/** Top-level sidebar section with a label header. */
+function SidebarSection({
   action,
   children,
   label,
@@ -168,5 +195,32 @@ function SidebarGroup({
       </div>
       <div className="sidebar__group-body">{children}</div>
     </section>
+  );
+}
+
+/** Collapsible sub-group within a sidebar section. */
+function NavGroup({
+  children,
+  defaultOpen = false,
+  label,
+}: {
+  children: ReactNode;
+  defaultOpen?: boolean;
+  label: string;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div className={`nav-group ${open ? "nav-group--open" : ""}`}>
+      <button
+        className="nav-group__toggle"
+        onClick={() => setOpen((o) => !o)}
+        type="button"
+      >
+        <ChevronDown size={12} strokeWidth={2} className="nav-group__chevron" />
+        <span>{label}</span>
+      </button>
+      {open && <div className="nav-group__items">{children}</div>}
+    </div>
   );
 }
