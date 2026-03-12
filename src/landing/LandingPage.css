@@ -168,7 +168,7 @@ button { cursor: pointer; font-family: inherit; }
 
 .hero__h1 {
   font-size: clamp(2.8rem, 7vw, 5.2rem);
-  font-weight: 700; letter-spacing: -0.045em;
+  font-weight: 600; letter-spacing: -0.045em;
   line-height: 1.06; margin: 0 0 20px;
   background: linear-gradient(180deg, var(--lp-white) 40%, #6e6e73 100%);
   -webkit-background-clip: text; -webkit-text-fill-color: transparent;
@@ -228,7 +228,7 @@ button { cursor: pointer; font-family: inherit; }
 }
 .sec__h2 {
   font-size: clamp(2rem, 4.5vw, 3.2rem);
-  font-weight: 700; letter-spacing: -0.04em; margin: 0 0 12px;
+  font-weight: 600; letter-spacing: -0.04em; margin: 0 0 12px;
   line-height: 1.1;
 }
 .sec__sub { font-size: 1.1rem; color: var(--lp-dim); margin: 0; max-width: 540px; }
@@ -328,7 +328,7 @@ button { cursor: pointer; font-family: inherit; }
   flex: 0 0 48px; padding-top: 2px;
 }
 .step__num span {
-  font-size: 0.78rem; font-weight: 700; color: var(--lp-blue);
+  font-size: 0.78rem; font-weight: 600; color: var(--lp-blue);
   width: 36px; height: 36px; border-radius: 50%;
   border: 1.5px solid var(--lp-blue);
   display: flex; align-items: center; justify-content: center;
@@ -447,7 +447,7 @@ button { cursor: pointer; font-family: inherit; }
 
 .cta-banner h2 {
   font-size: clamp(2rem, 4vw, 3rem);
-  font-weight: 700; letter-spacing: -0.04em; margin: 0 0 12px;
+  font-weight: 600; letter-spacing: -0.04em; margin: 0 0 12px;
   position: relative;
 }
 .cta-banner p {
@@ -498,7 +498,7 @@ button { cursor: pointer; font-family: inherit; }
 .tos__back:hover { opacity: 0.7; }
 
 .tos h1 {
-  font-size: 2.8rem; font-weight: 700; letter-spacing: -0.04em;
+  font-size: 2.8rem; font-weight: 600; letter-spacing: -0.04em;
   margin: 0 0 8px;
 }
 .tos__date { font-size: 0.88rem; color: var(--lp-dim); margin: 0 0 48px; }
