@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -13,6 +14,10 @@ export default defineConfig(async ({ mode }) => ({
     emptyOutDir: true,
   },
   plugins: [react()],
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

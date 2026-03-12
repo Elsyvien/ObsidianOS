@@ -31,7 +31,7 @@ function joinClasses(...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-function ensureMathJax() {
+export function ensureMathJax() {
   if (window.MathJax?.typesetPromise) {
     return Promise.resolve();
   }

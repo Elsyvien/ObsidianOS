@@ -1609,10 +1609,10 @@ function buildFormulaBrief(details: FormulaDetails): FormulaBrief {
   return {
     formulaId: details.id,
     coach: {
-      meaning: `${details.latex} shows up across ${details.noteCount} note${details.noteCount === 1 ? "" : "s"} in this course and anchors ${details.relatedConcepts.slice(0, 3).join(", ") || "the surrounding topic"}.`,
+      meaning: `$${details.latex}$ shows up across ${details.noteCount} note${details.noteCount === 1 ? "" : "s"} in this course and anchors ${details.relatedConcepts.slice(0, 3).join(", ") || "the surrounding topic"}.`,
       symbolBreakdown: [
-        leftSide ? `Left side: ${leftSide}` : "Left side not explicitly separated in the stored formula.",
-        rightSide ? `Right side: ${rightSide}` : "Use the linked note excerpts to unpack the right-hand side.",
+        leftSide ? `Left side: $${leftSide}$` : "Left side not explicitly separated in the stored formula.",
+        rightSide ? `Right side: $${rightSide}$` : "Use the linked note excerpts to unpack the right-hand side.",
         `Primary note anchors: ${details.sourceNoteTitles.slice(0, 3).join(", ")}`,
       ],
       useCases: details.linkedNotes.slice(0, 3).map((note) => `Use it in ${note.title} when the task asks for the core relation, setup, or transformation.`),
@@ -1624,18 +1624,18 @@ function buildFormulaBrief(details: FormulaDetails): FormulaBrief {
     },
     practice: {
       recallPrompts: [
-        `State ${details.latex} from memory and explain each symbol.`,
-        `Name the note where ${details.latex} first becomes important.`,
-        `Say when you would apply ${details.latex} in an exam setting.`,
+        `State $${details.latex}$ from memory and explain each symbol.`,
+        `Name the note where $${details.latex}$ first becomes important.`,
+        `Say when you would apply $${details.latex}$ in an exam setting.`,
       ],
-      shortAnswerDrills: details.relatedConcepts.slice(0, 3).map((concept) => `Explain how ${details.latex} supports ${concept}.`),
+      shortAnswerDrills: details.relatedConcepts.slice(0, 3).map((concept) => `Explain how $${details.latex}$ supports ${concept}.`),
       multipleChoiceChecks: [
-        `Which assumption matters most before using ${details.latex}?`,
-        `Which term in ${details.latex} changes when the system setup changes?`,
+        `Which assumption matters most before using $${details.latex}$?`,
+        `Which term in $${details.latex}$ changes when the system setup changes?`,
       ],
     },
     derivation: {
-      intuition: `Treat ${details.latex} as a compressed summary of the logic spread across ${details.sourceNoteTitles.slice(0, 2).join(" and ") || "the linked notes"}.`,
+      intuition: `Treat $${details.latex}$ as a compressed summary of the logic spread across ${details.sourceNoteTitles.slice(0, 2).join(" and ") || "the linked notes"}.`,
       assumptions: details.headings.slice(0, 4).map((heading) => `Recheck the ${heading} section before deriving or using the formula.`),
       outline: [
         "Start from the definition used in the linked note.",

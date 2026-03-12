@@ -14,7 +14,7 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::ai::{self, AiProviderSettings, ChatContextChunkInput, FlashcardCard};
-use crate::markdown::{normalize_key, note_title_candidates, parse_markdown};
+use crate::markdown::{normalize_key, note_title_candidates, parse_markdown, should_keep_formula};
 use crate::models::{
     AiCourseSummary, AiNoteInsight, AiSettings, AiSettingsInput, ApplyExamReviewActionsRequest,
     ChatCitation, ChatMessage, ChatMessageRole, ChatScope, ChatThreadDetails, ChatThreadSummary,
@@ -4111,7 +4111,10 @@ impl Database {
                     row.get::<_, String>(2)?,
                 ))
             })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|(_, latex, _)| should_keep_formula(latex))
+            .collect::<Vec<_>>();
         Ok(rows)
     }
 

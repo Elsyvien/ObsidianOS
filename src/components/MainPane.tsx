@@ -10,6 +10,7 @@ import type {
   WorkspaceSnapshot,
 } from "../types";
 import type { AppView, NoteFilter } from "./appShell";
+import { MarkdownContent } from "./MarkdownContent";
 import { MathFormula } from "./MathFormula";
 
 type AiFilter = "all" | "ready" | "needs-work" | "failed";
@@ -212,8 +213,8 @@ export function MainPane({
         <section className="surface surface--hero">
           <div className="surface__header">
             <div>
-              <span className="surface__eyebrow">Note library</span>
-              <h3>{selectedCourse ? `${selectedCourse.name} note review` : "Select a course"}</h3>
+              <span className="surface__eyebrow">Notes · {selectedCourse?.name ?? "No course"}</span>
+              <h3>Note review</h3>
             </div>
             <div className="toolbar">
               {[
@@ -230,20 +231,12 @@ export function MainPane({
                   {filter.label}
                 </button>
               ))}
-              <button
-                className="toolbar__item"
-                disabled={selectedNoteIds.length === 0}
-                onClick={() => onAddNotesToExamQueue(selectedNoteIds)}
-                type="button"
-              >
-                Add queued to exams
-              </button>
             </div>
           </div>
           <div className="metric-strip">
             <Metric label="Visible notes" value={String(filteredNotes.length)} />
-            <Metric label="Queued notes" value={String(selectedNoteIds.length)} />
-            <Metric label="Weak notes" value={String(dashboard?.weakNotes.length ?? 0)} />
+            <Metric label="Queued" value={String(selectedNoteIds.length)} />
+            <Metric label="Weak" value={String(dashboard?.weakNotes.length ?? 0)} />
             <Metric label="Formulas" value={String(dashboard?.formulas.length ?? 0)} />
           </div>
         </section>
@@ -254,6 +247,15 @@ export function MainPane({
               <span className="surface__eyebrow">Index</span>
               <h3>Review queue</h3>
             </div>
+            {selectedNoteIds.length > 0 && (
+              <button
+                className="button button--subtle"
+                onClick={() => onAddNotesToExamQueue(selectedNoteIds)}
+                type="button"
+              >
+                Add {selectedNoteIds.length} to exams
+              </button>
+            )}
           </div>
           {filteredNotes.length === 0 ? (
             <EmptyState
@@ -265,7 +267,7 @@ export function MainPane({
               }
             />
           ) : (
-            <div className="row-list row-list--compact">
+            <div className="row-list row-list--compact row-list--scrollable">
               {filteredNotes.map((note) => (
                 <article
                   key={note.id}
@@ -303,15 +305,15 @@ export function MainPane({
           )}
         </section>
 
-        <section className="surface">
-          <div className="surface__header">
-            <div>
-              <span className="surface__eyebrow">Flashcard queue</span>
-              <h3>Notes armed for output</h3>
+        {selectedQueue.length > 0 && (
+          <section className="surface">
+            <div className="surface__header">
+              <div>
+                <span className="surface__eyebrow">Output queue</span>
+                <h3>{selectedQueue.length} notes ready for flashcards</h3>
+              </div>
             </div>
-          </div>
-          {selectedQueue.length ? (
-            <div className="row-list row-list--compact">
+            <div className="row-list row-list--compact row-list--scrollable-sm">
               {selectedQueue.map((note) => (
                 <article key={note.id} className="row-item">
                   <button className="row-item__main" onClick={() => onOpenNote(note.id)} type="button">
@@ -328,13 +330,8 @@ export function MainPane({
                 </article>
               ))}
             </div>
-          ) : (
-            <EmptyState
-              title="No notes queued"
-              description="Queue notes from the library above to build the flashcard set."
-            />
-          )}
-        </section>
+          </section>
+        )}
       </div>
     );
   }
@@ -537,7 +534,7 @@ export function MainPane({
           </div>
           {dashboard?.ai.summary ? (
             <div className="insight-stack">
-              <p className="inspector-copy">{dashboard.ai.summary}</p>
+              <MarkdownContent className="inspector-copy" text={dashboard.ai.summary} />
               <section className="insight-list">
                 <strong>Revision priorities</strong>
                 <ul>
@@ -622,7 +619,7 @@ export function MainPane({
             </div>
           </div>
           {aiNotes.length ? (
-            <div className="row-list row-list--compact">
+            <div className="row-list row-list--compact row-list--scrollable">
               {aiNotes.map((note) => (
                 <article key={note.id} className={`row-item ${selectedNoteId === note.id ? "row-item--active" : ""}`}>
                   <button className="row-item__main" onClick={() => onOpenAiNote(note.id)} type="button">
@@ -837,7 +834,7 @@ export function MainPane({
   return (
     <div className="page-stack">
       {scanNotice}
-      <section className="surface surface--hero">
+      <section className="surface surface--hero surface--overview">
         <div className="overview-hero">
           <div>
             <span className="surface__eyebrow">Active course</span>
@@ -853,10 +850,7 @@ export function MainPane({
             <span>{dashboard?.countdown.label ?? "No exam scheduled"}</span>
           </div>
         </div>
-      </section>
-
-      <section className="surface">
-        <div className="metric-strip">
+        <div className="metric-strip metric-strip--overview">
           <Metric
             label="Concept coverage"
             value={dashboard ? `${clampPercent(dashboard.coverage.percentage)}%` : "--"}

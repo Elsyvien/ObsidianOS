@@ -7,6 +7,7 @@ import type {
   ChatThreadSummary,
   CourseConfig,
 } from "../types";
+import { MarkdownContent } from "./MarkdownContent";
 
 type ChatWorkspaceProps = {
   aiEnabled: boolean;
@@ -43,15 +44,25 @@ export function ChatWorkspace({
 }: ChatWorkspaceProps) {
   const [composer, setComposer] = useState("");
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const sending = busyAction === "Chat send failed";
+  const visibleThreads = chatScope === "course" ? courseThreads : vaultThreads;
+
+  const submitMessage = () => {
+    const nextMessage = composer.trim();
+    if (!nextMessage || sending || (!selectedCourse && chatScope === "course")) {
+      return;
+    }
+
+    onSendMessage(nextMessage);
+    setComposer("");
+  };
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({
       top: transcriptRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [threadDetails?.messages.length]);
-
-  const sending = busyAction === "Chat send failed";
+  }, [sending, threadDetails?.messages.length]);
 
   if (!selectedCourse && chatScope === "course") {
     return (
@@ -66,7 +77,7 @@ export function ChatWorkspace({
   }
 
   return (
-    <div className="page-stack">
+    <div className="page-stack page-stack--chat">
       <section className="surface surface--hero">
         <div className="surface__header">
           <div>
@@ -82,55 +93,57 @@ export function ChatWorkspace({
         <p className="surface__summary">
           Ask the current course or the whole vault a question. Answers stay notes-first, include citations, and clearly flag any fallback beyond your notes.
         </p>
-        <div className="toolbar">
-          {(["course", "vault"] as ChatScope[]).map((scope) => (
-            <button
-              key={scope}
-              className={`toolbar__item ${chatScope === scope ? "toolbar__item--active" : ""}`}
-              onClick={() => onChangeScope(scope)}
-              type="button"
-            >
-              {scope === "course" ? "Current course" : "Whole vault"}
-            </button>
-          ))}
-        </div>
       </section>
 
       <section className="surface chat-workspace">
         <aside className="chat-workspace__rail">
+          <div className="chat-sidebar-card">
+            <div className="surface__header chat-sidebar-card__header">
+              <div>
+                <span className="surface__eyebrow">Scope</span>
+                <h3>{chatScope === "course" ? "Current course" : "Whole vault"}</h3>
+              </div>
+            </div>
+            <div className="toolbar chat-scope-toggle" role="tablist" aria-label="Chat scope">
+              {(["course", "vault"] as ChatScope[]).map((scope) => (
+                <button
+                  key={scope}
+                  className={`toolbar__item ${chatScope === scope ? "toolbar__item--active" : ""}`}
+                  onClick={() => onChangeScope(scope)}
+                  type="button"
+                >
+                  {scope === "course" ? "Current course" : "Whole vault"}
+                </button>
+              ))}
+            </div>
+          </div>
+
           <ThreadGroup
-            activeScope={chatScope}
-            emptyLabel="No current-course threads yet"
-            scope="course"
+            emptyLabel={chatScope === "course" ? "No current-course threads yet" : "No vault threads yet"}
+            scope={chatScope}
             selectedThreadId={selectedThreadId}
-            threads={courseThreads}
-            title="Current course"
-            onSelectThread={(threadId) => onSelectThread(threadId, "course")}
-          />
-          <ThreadGroup
-            activeScope={chatScope}
-            emptyLabel="No vault threads yet"
-            scope="vault"
-            selectedThreadId={selectedThreadId}
-            threads={vaultThreads}
-            title="Whole vault"
-            onSelectThread={(threadId) => onSelectThread(threadId, "vault")}
+            threads={visibleThreads}
+            title={chatScope === "course" ? "Current course threads" : "Whole vault threads"}
+            onSelectThread={(threadId) => onSelectThread(threadId, chatScope)}
           />
         </aside>
 
         <div className="chat-workspace__main">
-          <div className="surface__header">
+          <div className="surface__header chat-workspace__main-header">
             <div>
               <span className="surface__eyebrow">
                 {threadDetails ? `${threadDetails.scope === "course" ? "Course" : "Vault"} thread` : "Notes-first chat"}
               </span>
               <h3>{threadDetails?.title ?? "Start a grounded thread"}</h3>
             </div>
-            {threadDetails ? (
-              <button className="button button--ghost button--danger" onClick={() => onDeleteThread(threadDetails.id)} type="button">
-                Delete thread
-              </button>
-            ) : null}
+            <div className="button-row">
+              {sending ? <span className="meta-pill chat-status-pill">Assistant is replying</span> : null}
+              {threadDetails ? (
+                <button className="button button--ghost button--danger" onClick={() => onDeleteThread(threadDetails.id)} type="button">
+                  Delete thread
+                </button>
+              ) : null}
+            </div>
           </div>
 
           {!aiEnabled ? (
@@ -142,14 +155,21 @@ export function ChatWorkspace({
             <>
               <div className="chat-transcript" ref={transcriptRef}>
                 {threadDetails?.messages.length ? (
-                  threadDetails.messages.map((message) => (
-                    <ChatMessageCard key={message.id} message={message} onOpenNote={onOpenNote} />
-                  ))
+                  <>
+                    {threadDetails.messages.map((message) => (
+                      <ChatMessageCard key={message.id} message={message} onOpenNote={onOpenNote} />
+                    ))}
+                    {sending ? <StreamingMessageCard /> : null}
+                  </>
                 ) : (
-                  <EmptyState
-                    title="No messages yet"
-                    description="Ask a question about the current course or the whole vault to start a persistent thread."
-                  />
+                  sending ? (
+                    <StreamingMessageCard />
+                  ) : (
+                    <EmptyState
+                      title="No messages yet"
+                      description="Ask a question about the current course or the whole vault to start a persistent thread."
+                    />
+                  )
                 )}
               </div>
               <div className="chat-composer">
@@ -158,6 +178,12 @@ export function ChatWorkspace({
                   <textarea
                     className="exam-answer-textarea chat-composer__input"
                     onChange={(event) => setComposer(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        submitMessage();
+                      }
+                    }}
                     placeholder={
                       chatScope === "course"
                         ? "Ask the current course a grounded question."
@@ -165,15 +191,13 @@ export function ChatWorkspace({
                     }
                     value={composer}
                   />
+                  <span>Press Enter to send, Shift+Enter for a new line.</span>
                 </label>
                 <div className="button-row">
                   <button
                     className="button button--subtle"
                     disabled={sending || !composer.trim() || (!selectedCourse && chatScope === "course")}
-                    onClick={() => {
-                      onSendMessage(composer.trim());
-                      setComposer("");
-                    }}
+                    onClick={submitMessage}
                     type="button"
                   >
                     {sending ? "Sending..." : "Send"}
@@ -189,15 +213,12 @@ export function ChatWorkspace({
 }
 
 function ThreadGroup({
-  activeScope,
   emptyLabel,
-  scope,
   selectedThreadId,
   threads,
   title,
   onSelectThread,
 }: {
-  activeScope: ChatScope;
   emptyLabel: string;
   scope: ChatScope;
   selectedThreadId: string | null;
@@ -206,11 +227,11 @@ function ThreadGroup({
   onSelectThread: (threadId: string) => void;
 }) {
   return (
-    <section className={`chat-thread-group ${activeScope === scope ? "chat-thread-group--active" : ""}`}>
+    <section className="chat-thread-group">
       <div className="surface__header">
         <div>
           <span className="surface__eyebrow">{title}</span>
-          <h3>Threads</h3>
+          <h3>{threads.length} saved</h3>
         </div>
       </div>
       {threads.length ? (
@@ -222,7 +243,10 @@ function ThreadGroup({
                   <span className="row-item__title">{thread.title}</span>
                   <span className="soft-badge">{thread.messageCount}</span>
                 </div>
-                <span className="row-item__subtitle">{thread.lastMessagePreview ?? "No messages yet"}</span>
+                <MarkdownContent
+                  className="row-item__subtitle chat-thread-preview"
+                  text={thread.lastMessagePreview ?? "No messages yet"}
+                />
               </button>
               <div className="row-item__meta">
                 <span>{thread.courseName ?? "Whole vault"}</span>
@@ -252,11 +276,14 @@ function ChatMessageCard({
         <span className="line-item__meta">{formatDateTime(message.createdAt)}</span>
       </div>
       <div className="chat-message__body">
-        <p>{message.content}</p>
+        <MarkdownContent className="chat-message__content" text={message.content} />
         {message.usedFallback ? (
           <div className="chat-fallback">
             <strong>Fallback used</strong>
-            <p>{message.fallbackReason ?? "The answer required context beyond the stored notes."}</p>
+            <MarkdownContent
+              className="chat-fallback__reason"
+              text={message.fallbackReason ?? "The answer required context beyond the stored notes."}
+            />
           </div>
         ) : null}
         {message.citations.length ? (
@@ -267,7 +294,7 @@ function ChatMessageCard({
                 <span>{shortenPath(citation.relativePath)}</span>
                 <span>{citation.headingPath}</span>
                 <span>{citation.courseName}</span>
-                <span>{citation.excerpt}</span>
+                <MarkdownContent className="chat-citation__excerpt" text={citation.excerpt} />
               </button>
             ))}
           </div>
@@ -283,5 +310,23 @@ function EmptyState({ title, description }: { title: string; description: string
       <strong>{title}</strong>
       <p>{description}</p>
     </div>
+  );
+}
+
+function StreamingMessageCard() {
+  return (
+    <article className="chat-message chat-message--assistant chat-message--streaming" aria-live="polite">
+      <div className="chat-message__meta">
+        <span className="surface__eyebrow">Assistant</span>
+        <span className="line-item__meta">Streaming reply</span>
+      </div>
+      <div className="chat-message__body">
+        <div className="chat-streaming-indicator">
+          <span className="chat-streaming-indicator__dot" />
+          <span className="chat-streaming-indicator__dot" />
+          <span className="chat-streaming-indicator__dot" />
+        </div>
+      </div>
+    </article>
   );
 }

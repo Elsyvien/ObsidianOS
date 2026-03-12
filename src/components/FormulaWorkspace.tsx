@@ -9,6 +9,7 @@ import type {
   FormulaWorkspaceSnapshot,
   NoteChunkPreview,
 } from "../types";
+import { MarkdownContent } from "./MarkdownContent";
 import { MathFormula } from "./MathFormula";
 
 type FormulaWorkspaceProps = {
@@ -339,7 +340,7 @@ function FormulaNoteRow({
     <button className="line-item formula-note-card" onClick={() => onOpenNote(note.noteId)} type="button">
       <span className="line-item__title">{note.title}</span>
       <span className="line-item__subtitle">{shortenPath(note.relativePath)}</span>
-      <p className="formula-note-card__summary">{formatPreviewText(note.excerpt, 220)}</p>
+      <MarkdownContent className="formula-note-card__summary" text={formatMarkdownPreview(note.excerpt, 220)} />
       <div className="formula-chip-list">
         {headingChips.map((heading) => (
           <span key={`${note.noteId}-${heading}`} className="formula-chip">
@@ -377,7 +378,7 @@ function FormulaChunkCard({
           Open note
         </button>
       </div>
-      <p className="formula-chunk__body">{formatPreviewText(chunk.text, 340)}</p>
+      <MarkdownContent className="formula-chunk__body" text={formatMarkdownPreview(chunk.text, 340)} />
       <div className="formula-chip-list">
         <span className="formula-chip">{headingLabel}</span>
         <span className="formula-chip formula-chip--muted">Chunk {chunk.ordinal + 1}</span>
@@ -391,7 +392,7 @@ function FormulaBriefPanel({ brief, tab }: { brief: FormulaBrief; tab: BriefTab 
   if (tab === "coach") {
     return (
       <div className="insight-stack">
-        <p className="inspector-copy">{brief.coach.meaning}</p>
+        <MarkdownContent className="inspector-copy" text={brief.coach.meaning} />
         <InsightList items={brief.coach.symbolBreakdown} title="Symbol breakdown" />
         <InsightList items={brief.coach.useCases} title="Use cases" />
         <InsightList items={brief.coach.pitfalls} title="Pitfalls" />
@@ -411,7 +412,7 @@ function FormulaBriefPanel({ brief, tab }: { brief: FormulaBrief; tab: BriefTab 
 
   return (
     <div className="insight-stack">
-      <p className="inspector-copy">{brief.derivation.intuition}</p>
+      <MarkdownContent className="inspector-copy" text={brief.derivation.intuition} />
       <InsightList items={brief.derivation.assumptions} title="Assumptions" />
       <InsightList items={brief.derivation.outline} title="Outline" />
     </div>
@@ -455,7 +456,9 @@ function InsightList({ items, title }: { items: string[]; title: string }) {
       <strong>{title}</strong>
       <ul>
         {items.map((item) => (
-          <li key={`${title}-${item}`}>{item}</li>
+          <li key={`${title}-${item}`}>
+            <MarkdownContent text={item} />
+          </li>
         ))}
       </ul>
     </div>
@@ -466,25 +469,106 @@ function capitalize(value: string) {
   return value.slice(0, 1).toUpperCase() + value.slice(1);
 }
 
-function formatPreviewText(value: string, maxLength: number) {
-  const cleaned = value
-    .replace(/\$\$[\s\S]*?\$\$/g, " ")
-    .replace(/\$[^$\n]+\$/g, " ")
+function formatMarkdownPreview(value: string, maxLength: number) {
+  const mathPattern = /\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\\\([^\n]+?\\\)|\$[^$\n]+\$/g;
+  const mathTokens = value.match(mathPattern) ?? [];
+  let mathIndex = 0;
+
+  const normalized = value
+    .replace(mathPattern, () => `__OBSIDIAN_OS_MATH_${mathIndex++}__`)
     .replace(/\[\[([^\]]+)\]\]/g, "$1")
-    .replace(/#+\s*/g, "")
-    .replace(/\*\*/g, "")
-    .replace(/__+/g, "")
-    .replace(/\\[a-zA-Z]+(?:\s*\{[^}]*\}|\s*\[[^\]]*\]|[_^][A-Za-z0-9{}()+\-\\=.,]*)*/g, " ")
-    .replace(/[{}_^]/g, " ")
-    .replace(/-{3,}/g, " · ")
+    .replace(/^(#{1,6})\s+/gm, "")
+    .replace(/\r/g, "")
+    .replace(/\n{2,}/g, " ")
+    .replace(/\n/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
-  if (cleaned.length <= maxLength) {
-    return cleaned;
+  let output = "";
+  let visibleLength = 0;
+  let index = 0;
+
+  while (index < normalized.length && visibleLength < maxLength) {
+    const placeholderMatch = normalized.slice(index).match(/^__OBSIDIAN_OS_MATH_(\d+)__/);
+
+    if (placeholderMatch) {
+      const mathToken = mathTokens[Number(placeholderMatch[1])] ?? "";
+      const normalizedMath = normalizeMathToken(mathToken);
+
+      if (normalizedMath) {
+        output = appendPreviewSegment(output, normalizedMath);
+        visibleLength += getMathVisibleLength(normalizedMath);
+      }
+
+      index += placeholderMatch[0].length;
+      continue;
+    }
+
+    output += normalized[index];
+    visibleLength += 1;
+    index += 1;
   }
 
-  return `${cleaned.slice(0, maxLength).trim()}...`;
+  const trimmed = output.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return fallbackMathPreview(mathTokens, maxLength);
+  }
+
+  return index < normalized.length ? `${trimmed}...` : trimmed;
+}
+
+function normalizeMathToken(value: string) {
+  if (!value) {
+    return "";
+  }
+
+  if (value.startsWith("$$") && value.endsWith("$$")) {
+    const body = value.slice(2, -2).replace(/\s+/g, " ").trim();
+    return body ? `$$${body}$$` : "";
+  }
+
+  if (value.startsWith("\\[") && value.endsWith("\\]")) {
+    const body = value.slice(2, -2).replace(/\s+/g, " ").trim();
+    return body ? `$$${body}$$` : "";
+  }
+
+  if (value.startsWith("\\(") && value.endsWith("\\)")) {
+    const body = value.slice(2, -2).replace(/\s+/g, " ").trim();
+    return body ? `$${body}$` : "";
+  }
+
+  const body = value.slice(1, -1).replace(/\s+/g, " ").trim();
+  return body ? `$${body}$` : "";
+}
+
+function getMathVisibleLength(value: string) {
+  return value.replace(/^\$\$?|\$\$?$/g, "").trim().length;
+}
+
+function appendPreviewSegment(output: string, segment: string) {
+  if (!output) {
+    return segment;
+  }
+
+  if (output.endsWith(" ") || segment.startsWith(" ")) {
+    return `${output}${segment}`;
+  }
+
+  return `${output} ${segment}`;
+}
+
+function fallbackMathPreview(mathTokens: string[], maxLength: number) {
+  const fallback = mathTokens.map((token) => normalizeMathToken(token)).filter(Boolean).join(" ").trim();
+
+  if (!fallback) {
+    return "";
+  }
+
+  if (fallback.length <= maxLength) {
+    return fallback;
+  }
+
+  return `${fallback.slice(0, maxLength).trim()}...`;
 }
 
 function formatHeadingPath(value: string) {

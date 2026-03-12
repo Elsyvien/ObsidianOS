@@ -16,6 +16,7 @@ import type {
   NoteDetails,
   NoteMasteryState,
 } from "../types";
+import { MarkdownContent } from "./MarkdownContent";
 
 type ExamsWorkspaceProps = {
   busyAction: string | null;
@@ -619,7 +620,7 @@ function ExamQuestionCard({
         <span className="surface__eyebrow">
           Question {question.index} · {question.type === "multiple-choice" ? "MCQ" : "Short answer"}
         </span>
-        <h3>{question.prompt}</h3>
+        <MarkdownContent className="exam-reader__prompt" text={question.prompt} />
         {question.type === "multiple-choice" ? (
           <div className="exam-answer-list">
             {question.options.map((option) => (
@@ -655,7 +656,7 @@ function ExamQuestionCard({
         </div>
         {noteDetails ? (
           <div className="insight-stack">
-            <p className="inspector-copy">{noteDetails.excerpt}</p>
+            <MarkdownContent className="inspector-copy" text={noteDetails.excerpt} />
             <dl className="definition-grid">
               <Definition label="Path" value={shortenPath(noteDetails.relativePath)} />
               <Definition label="Links" value={String(noteDetails.links.length)} />

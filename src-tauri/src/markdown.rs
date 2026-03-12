@@ -220,13 +220,16 @@ fn collect_formulas(body: &str, frontmatter_formulas: &[String]) -> Vec<String> 
 
     let mut formulas = BTreeSet::new();
     for item in frontmatter_formulas {
-        formulas.insert(clean_formula(item));
+        let cleaned = clean_formula(item);
+        if should_keep_formula(&cleaned) {
+            formulas.insert(cleaned);
+        }
     }
 
     for capture in block_regex.captures_iter(body) {
         if let Some(value) = capture.get(1) {
             let cleaned = clean_formula(value.as_str());
-            if !cleaned.is_empty() {
+            if should_keep_formula(&cleaned) {
                 formulas.insert(cleaned);
             }
         }
@@ -235,13 +238,124 @@ fn collect_formulas(body: &str, frontmatter_formulas: &[String]) -> Vec<String> 
     for capture in inline_regex.captures_iter(body) {
         if let Some(value) = capture.get(1) {
             let cleaned = clean_formula(value.as_str());
-            if cleaned.contains('=') || cleaned.contains('\\') {
+            if should_keep_formula(&cleaned) {
                 formulas.insert(cleaned);
             }
         }
     }
 
     formulas.into_iter().collect()
+}
+
+pub fn should_keep_formula(value: &str) -> bool {
+    let cleaned = clean_formula(value);
+    if cleaned.is_empty() {
+        return false;
+    }
+
+    let compact = cleaned.replace(' ', "");
+    if compact.len() < 3 {
+        return false;
+    }
+
+    if let Some((left, relation, right)) = split_relation(&cleaned) {
+        return !is_trivial_relation(left, relation, right);
+    }
+
+    false
+}
+
+fn has_structural_math(value: &str) -> bool {
+    const COMPLEX_COMMANDS: [&str; 12] = [
+        "\\frac",
+        "\\sum",
+        "\\prod",
+        "\\int",
+        "\\sqrt",
+        "\\lim",
+        "\\log",
+        "\\sin",
+        "\\cos",
+        "\\tan",
+        "\\begin",
+        "\\det",
+    ];
+
+    COMPLEX_COMMANDS.iter().any(|command| value.contains(command))
+        || value.contains(['^', '_', '+', '*', '/'])
+}
+
+fn split_relation(value: &str) -> Option<(&str, &str, &str)> {
+    const RELATIONS: [&str; 12] = [
+        "\\notin",
+        "\\subseteq",
+        "\\subset",
+        "\\leq",
+        "\\geq",
+        "\\neq",
+        "<=",
+        ">=",
+        "!=",
+        "\\in",
+        "=",
+        "<",
+    ];
+
+    for relation in RELATIONS {
+        if let Some((left, right)) = value.split_once(relation) {
+            let left = left.trim();
+            let right = right.trim();
+            if !left.is_empty() && !right.is_empty() {
+                return Some((left, relation, right));
+            }
+        }
+    }
+
+    if let Some((left, right)) = value.split_once('>') {
+        let left = left.trim();
+        let right = right.trim();
+        if !left.is_empty() && !right.is_empty() {
+            return Some((left, ">", right));
+        }
+    }
+
+    None
+}
+
+fn is_trivial_relation(left: &str, relation: &str, right: &str) -> bool {
+    matches!(relation, "=" | "!=" | "\\neq" | "<" | ">" | "<=" | ">=" | "\\leq" | "\\geq" | "\\in" | "\\notin" | "\\subset" | "\\subseteq")
+        && is_simple_formula_atom(left)
+        && is_simple_formula_atom(right)
+}
+
+fn is_simple_formula_atom(value: &str) -> bool {
+    let stripped = value
+        .trim()
+        .trim_matches(|character| matches!(character, '(' | ')' | '[' | ']' | '{' | '}'));
+    if stripped.is_empty() {
+        return true;
+    }
+
+    let unsigned = stripped
+        .strip_prefix('+')
+        .or_else(|| stripped.strip_prefix('-'))
+        .unwrap_or(stripped)
+        .trim();
+    if unsigned.is_empty() {
+        return true;
+    }
+
+    if has_structural_math(unsigned) {
+        return false;
+    }
+
+    if unsigned.contains("\\left") || unsigned.contains("\\right") {
+        return false;
+    }
+
+    unsigned
+        .chars()
+        .all(|character| character.is_alphanumeric() || matches!(character, '\\' | '.' | ',' | '{' | '}'))
 }
 
 fn collect_concepts(
@@ -299,7 +413,18 @@ fn collect_excerpt(body: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
 
-    excerpt.chars().take(280).collect()
+    let excerpt = excerpt
+        .replace("\\ (", "\\(")
+        .replace("\\ )", "\\)")
+        .replace("\\ [", "\\[")
+        .replace("\\ ]", "\\]");
+
+    let mut truncated = excerpt.chars().take(280).collect::<String>();
+    while truncated.ends_with([' ', '\\']) {
+        truncated.pop();
+    }
+
+    truncated
 }
 
 fn should_keep_concept(value: &str) -> bool {
@@ -410,5 +535,35 @@ $$
             .any(|value| value == "Adjacency matrix"));
         assert!(parsed.formulas.iter().any(|value| value.contains("deg(v)")));
         assert_eq!(normalize_key("Graph Theory"), "graph theory");
+    }
+
+    #[test]
+    fn filters_trivial_math_snippets_from_formula_library() {
+        let content = r#"
+Frontmatter formula list:
+
+Inline snippets $\epsilon > 0$, $a \in U$, $k \in N$, and $x = -1$ should stay out.
+Useful formulas like $y = mx + b$ and $f(x) = x^2$ should remain.
+Standalone math like $\mathbb{R}^n$ and markdown noise like $**stetig** in$ should also stay out.
+
+$$
+\sum_{k=1}^{n} k = \frac{n(n+1)}{2}
+$$
+"#;
+
+        let parsed = parse_markdown("analysis", content);
+
+        assert!(parsed.formulas.iter().any(|value| value == "y = mx + b"));
+        assert!(parsed.formulas.iter().any(|value| value == "f(x) = x^2"));
+        assert!(parsed
+            .formulas
+            .iter()
+            .any(|value| value.contains("\\sum_{k=1}^{n} k = \\frac{n(n+1)}{2}")));
+        assert!(!parsed.formulas.iter().any(|value| value == "\\epsilon > 0"));
+        assert!(!parsed.formulas.iter().any(|value| value == "a \\in U"));
+        assert!(!parsed.formulas.iter().any(|value| value == "k \\in N"));
+        assert!(!parsed.formulas.iter().any(|value| value == "x = -1"));
+        assert!(!parsed.formulas.iter().any(|value| value == "\\mathbb{R}^n"));
+        assert!(!parsed.formulas.iter().any(|value| value == "**stetig** in"));
     }
 }

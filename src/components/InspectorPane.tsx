@@ -12,6 +12,7 @@ import type {
   WorkspaceSnapshot,
 } from "../types";
 import type { AppView } from "./appShell";
+import { MarkdownContent } from "./MarkdownContent";
 import { MathFormula } from "./MathFormula";
 
 type EditableCourseField = "name" | "folder" | "examDate" | "revisionFolder" | "flashcardsFolder";
@@ -156,7 +157,7 @@ export function InspectorPane({
           <InspectorSection eyebrow="Latest brief" title="Course summary">
             {workspace.dashboard?.ai.summary ? (
               <>
-                <p className="inspector-copy">{workspace.dashboard.ai.summary}</p>
+                <MarkdownContent className="inspector-copy" text={workspace.dashboard.ai.summary} />
                 <dl className="inspector-grid">
                   <InspectorItem
                     label="Updated"
@@ -225,7 +226,7 @@ export function InspectorPane({
                 </div>
                 {noteDetails.aiInsight ? (
                   <div className="insight-stack">
-                    <p className="inspector-copy">{noteDetails.aiInsight.summary}</p>
+                    <MarkdownContent className="inspector-copy" text={noteDetails.aiInsight.summary} />
                     <InsightList
                       items={noteDetails.aiInsight.takeaways}
                       title="Takeaways"
@@ -345,7 +346,7 @@ export function InspectorPane({
               <p className="inspector-copy">Loading note details...</p>
             ) : noteDetails ? (
               <>
-                <p className="inspector-copy">{noteDetails.excerpt}</p>
+                <MarkdownContent className="inspector-copy" text={noteDetails.excerpt} />
                 <dl className="inspector-grid">
                   <InspectorItem label="Path" value={noteDetails.relativePath} />
                   <InspectorItem label="Queued" value={selectedNoteIds.includes(noteDetails.id) ? "Yes" : "No"} />
@@ -392,7 +393,7 @@ export function InspectorPane({
                     </div>
                     {noteDetails.aiInsight ? (
                       <div className="insight-stack">
-                        <p className="inspector-copy">{noteDetails.aiInsight.summary}</p>
+                        <MarkdownContent className="inspector-copy" text={noteDetails.aiInsight.summary} />
                         <InsightList
                           items={noteDetails.aiInsight.takeaways}
                           title="What to remember"
@@ -718,7 +719,9 @@ function InsightList({ items, title }: { items: string[]; title: string }) {
       <strong>{title}</strong>
       <ul>
         {items.map((item) => (
-          <li key={`${title}-${item}`}>{item}</li>
+          <li key={`${title}-${item}`}>
+            <MarkdownContent text={item} />
+          </li>
         ))}
       </ul>
     </div>
