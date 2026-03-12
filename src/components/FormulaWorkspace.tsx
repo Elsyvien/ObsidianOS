@@ -239,15 +239,6 @@ export function FormulaWorkspace({
                   />
                 ))}
               </div>
-              {visibleFormulaCount < filteredFormulas.length ? (
-                <span className="formula-list__status">
-                  Showing {visibleFormulas.length} of {filteredFormulas.length} formulas · scroll for more
-                </span>
-              ) : (
-                <span className="formula-list__status formula-list__status--complete">
-                  Loaded all {filteredFormulas.length} formulas
-                </span>
-              )}
             </>
           ) : (
             <EmptyState
