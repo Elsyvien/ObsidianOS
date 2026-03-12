@@ -478,16 +478,6 @@ function App() {
   }, [formulaWorkspace, selectedFormulaId]);
 
   useEffect(() => {
-    const availableThreadIds = new Set(
-      [...courseChatThreads, ...vaultChatThreads].map((thread) => thread.id),
-    );
-    if (selectedChatThreadId && !availableThreadIds.has(selectedChatThreadId)) {
-      setSelectedChatThreadId(null);
-      setChatThread(null);
-    }
-  }, [courseChatThreads, selectedChatThreadId, vaultChatThreads]);
-
-  useEffect(() => {
     if (!workspace.vault || !selectedCourseId || !aiIsRunning) {
       return;
     }

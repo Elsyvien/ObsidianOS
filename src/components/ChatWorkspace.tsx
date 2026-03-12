@@ -95,10 +95,10 @@ export function ChatWorkspace({
         </p>
       </section>
 
-      <section className="surface chat-workspace">
-        <aside className="chat-workspace__rail">
-          <div className="chat-sidebar-card">
-            <div className="surface__header chat-sidebar-card__header">
+      <div className="chat-layout">
+        <aside className="chat-layout__rail">
+          <div className="chat-sidebar-group">
+            <div className="surface__header">
               <div>
                 <span className="surface__eyebrow">Scope</span>
                 <h3>{chatScope === "course" ? "Current course" : "Whole vault"}</h3>
@@ -128,8 +128,8 @@ export function ChatWorkspace({
           />
         </aside>
 
-        <div className="chat-workspace__main">
-          <div className="surface__header chat-workspace__main-header">
+        <div className="chat-layout__main">
+          <div className="surface__header chat-layout__main-header">
             <div>
               <span className="surface__eyebrow">
                 {threadDetails ? `${threadDetails.scope === "course" ? "Course" : "Vault"} thread` : "Notes-first chat"}
@@ -207,7 +207,7 @@ export function ChatWorkspace({
             </>
           )}
         </div>
-      </section>
+      </div>
     </div>
   );
 }

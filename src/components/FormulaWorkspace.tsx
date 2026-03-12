@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { formatDateTime, shortenPath } from "../lib";
 import type {
   CourseConfig,
@@ -28,6 +28,8 @@ type ReaderMode = "split" | "maximized";
 type SortMode = "coverage" | "alphabetical";
 type BriefTab = "coach" | "practice" | "derivation";
 
+const FORMULA_BATCH_SIZE = 24;
+
 export function FormulaWorkspace({
   aiEnabled,
   busyAction,
@@ -43,6 +45,8 @@ export function FormulaWorkspace({
   const [sortMode, setSortMode] = useState<SortMode>("coverage");
   const [search, setSearch] = useState("");
   const [briefTab, setBriefTab] = useState<BriefTab>("coach");
+  const [visibleFormulaCount, setVisibleFormulaCount] = useState(FORMULA_BATCH_SIZE);
+  const formulaListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!formulaWorkspace?.formulas.length) {
@@ -61,6 +65,94 @@ export function FormulaWorkspace({
     setBriefTab("coach");
   }, [formulaDetails?.id]);
 
+  const filteredFormulas = useMemo(
+    () =>
+      (formulaWorkspace?.formulas ?? [])
+        .filter((formula) => {
+          if (!search.trim()) {
+            return true;
+          }
+          const query = search.toLowerCase();
+          return (
+            formula.latex.toLowerCase().includes(query) ||
+            formula.sourceNoteTitles.some((title) => title.toLowerCase().includes(query))
+          );
+        })
+        .sort((left, right) =>
+          sortMode === "alphabetical"
+            ? left.latex.localeCompare(right.latex)
+            : right.noteCount - left.noteCount || left.latex.localeCompare(right.latex),
+        ),
+    [formulaWorkspace?.formulas, search, sortMode],
+  );
+
+  const loadMoreFormulas = useCallback(() => {
+    setVisibleFormulaCount((current) => {
+      if (current >= filteredFormulas.length) {
+        return current;
+      }
+
+      return Math.min(current + FORMULA_BATCH_SIZE, filteredFormulas.length);
+    });
+  }, [filteredFormulas.length]);
+
+  useEffect(() => {
+    setVisibleFormulaCount(Math.min(FORMULA_BATCH_SIZE, filteredFormulas.length || FORMULA_BATCH_SIZE));
+
+    if (formulaListRef.current) {
+      formulaListRef.current.scrollTop = 0;
+    }
+  }, [filteredFormulas]);
+
+  useEffect(() => {
+    if (!selectedFormulaId) {
+      return;
+    }
+
+    const selectedIndex = filteredFormulas.findIndex((formula) => formula.id === selectedFormulaId);
+    if (selectedIndex === -1) {
+      return;
+    }
+
+    setVisibleFormulaCount((current) => Math.max(current, Math.ceil((selectedIndex + 1) / FORMULA_BATCH_SIZE) * FORMULA_BATCH_SIZE));
+  }, [filteredFormulas, selectedFormulaId]);
+
+  useEffect(() => {
+    if (visibleFormulaCount >= filteredFormulas.length) {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const list = formulaListRef.current;
+      if (!list) {
+        return;
+      }
+
+      if (list.scrollHeight <= list.clientHeight + 24) {
+        loadMoreFormulas();
+      }
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [filteredFormulas.length, loadMoreFormulas, visibleFormulaCount]);
+
+  const visibleFormulas = useMemo(
+    () => filteredFormulas.slice(0, visibleFormulaCount),
+    [filteredFormulas, visibleFormulaCount],
+  );
+
+  const handleFormulaListScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      const list = event.currentTarget;
+      const remainingDistance = list.scrollHeight - list.scrollTop - list.clientHeight;
+
+      if (remainingDistance <= 240) {
+        loadMoreFormulas();
+      }
+    },
+    [loadMoreFormulas],
+  );
+
   if (!selectedCourse) {
     return (
       <div className="page-stack">
@@ -72,23 +164,6 @@ export function FormulaWorkspace({
       </div>
     );
   }
-
-  const filteredFormulas = (formulaWorkspace?.formulas ?? [])
-    .filter((formula) => {
-      if (!search.trim()) {
-        return true;
-      }
-      const query = search.toLowerCase();
-      return (
-        formula.latex.toLowerCase().includes(query) ||
-        formula.sourceNoteTitles.some((title) => title.toLowerCase().includes(query))
-      );
-    })
-    .sort((left, right) =>
-      sortMode === "alphabetical"
-        ? left.latex.localeCompare(right.latex)
-        : right.noteCount - left.noteCount || left.latex.localeCompare(right.latex),
-    );
 
   return (
     <div className="page-stack">
@@ -149,16 +224,31 @@ export function FormulaWorkspace({
             </label>
           </div>
           {filteredFormulas.length ? (
-            <div className="row-list row-list--compact formula-list">
-              {filteredFormulas.map((formula) => (
-                <FormulaListRow
-                  key={formula.id}
-                  formula={formula}
-                  isActive={selectedFormulaId === formula.id}
-                  onSelect={() => onSelectFormula(formula.id)}
-                />
-              ))}
-            </div>
+            <>
+              <div
+                ref={formulaListRef}
+                className="row-list row-list--compact formula-list"
+                onScroll={handleFormulaListScroll}
+              >
+                {visibleFormulas.map((formula) => (
+                  <FormulaListRow
+                    key={formula.id}
+                    formula={formula}
+                    isActive={selectedFormulaId === formula.id}
+                    onSelect={() => onSelectFormula(formula.id)}
+                  />
+                ))}
+              </div>
+              {visibleFormulaCount < filteredFormulas.length ? (
+                <span className="formula-list__status">
+                  Showing {visibleFormulas.length} of {filteredFormulas.length} formulas · scroll for more
+                </span>
+              ) : (
+                <span className="formula-list__status formula-list__status--complete">
+                  Loaded all {filteredFormulas.length} formulas
+                </span>
+              )}
+            </>
           ) : (
             <EmptyState
               title="No formulas in this view"
