@@ -40,7 +40,6 @@ export function MarkdownContent({ className, text }: MarkdownContentProps) {
     void ensureMathJax()
       .then(async () => {
         if (!active || !window.MathJax?.typesetPromise) return;
-        window.MathJax.texReset?.();
         window.MathJax.typesetClear?.([...mathElements]);
         await window.MathJax.typesetPromise([...mathElements]);
       })
