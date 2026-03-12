@@ -194,13 +194,11 @@ export function FormulaWorkspace({
         </div>
       </section>
 
-      <section className={`surface formula-workspace formula-workspace--${readerMode}`}>
-        <div className={`formula-workspace__rail ${readerMode === "maximized" ? "formula-workspace__rail--hidden" : ""}`}>
-          <div className="surface__header">
-            <div>
-              <span className="surface__eyebrow">Library</span>
-              <h3>Course formulas</h3>
-            </div>
+      <div className={`fw-layout fw-layout--${readerMode}`}>
+        <aside className={`fw-rail ${readerMode === "maximized" ? "fw-rail--hidden" : ""}`}>
+          <div className="fw-rail__header">
+            <span className="surface__eyebrow">Library</span>
+            <h3>Course formulas</h3>
           </div>
           <div className="formula-controls">
             <label className="field">
@@ -227,7 +225,7 @@ export function FormulaWorkspace({
             <>
               <div
                 ref={formulaListRef}
-                className="row-list row-list--compact formula-list"
+                className="fw-list"
                 onScroll={handleFormulaListScroll}
               >
                 {visibleFormulas.map((formula) => (
@@ -246,13 +244,13 @@ export function FormulaWorkspace({
               description="Change the search term or run a scan to refresh the extracted math."
             />
           )}
-        </div>
+        </aside>
 
-        <div className="formula-workspace__main">
+        <div className="fw-main">
           {formulaDetails ? (
             <>
-              <section className="formula-detail-card">
-                <div className="surface__header">
+              <section className="fw-detail">
+                <div className="fw-detail__header">
                   <div>
                     <span className="surface__eyebrow">Selected formula</span>
                     <h3>Context and explanation</h3>
@@ -287,7 +285,7 @@ export function FormulaWorkspace({
                     sourceClassName="math-formula__source formula-display__source"
                   />
                 </div>
-                <dl className="definition-grid">
+                <dl className="fw-meta-row">
                   <Definition label="Appears in notes" value={String(formulaDetails.noteCount)} />
                   <Definition label="Related concepts" value={String(formulaDetails.relatedConcepts.length)} />
                   <Definition label="Heading anchors" value={String(formulaDetails.headings.length)} />
@@ -304,41 +302,34 @@ export function FormulaWorkspace({
                 </dl>
               </section>
 
-              <section className="surface formula-context-grid">
-                <div className="formula-context-column">
-                  <div className="surface__header">
-                    <div>
-                      <span className="surface__eyebrow">Linked notes</span>
-                      <h3>Where this formula lives</h3>
-                    </div>
-                  </div>
-                  <div className="line-list formula-note-list">
-                    {formulaDetails.linkedNotes.map((note) => (
-                      <FormulaNoteRow key={note.noteId} note={note} onOpenNote={onOpenNote} />
-                    ))}
-                  </div>
+              <section className="fw-section">
+                <div className="fw-section__header">
+                  <span className="surface__eyebrow">Linked notes</span>
+                  <h3>Where this formula lives</h3>
                 </div>
-                <div className="formula-context-column">
-                  <div className="surface__header">
-                    <div>
-                      <span className="surface__eyebrow">Source chunks</span>
-                      <h3>Reader context</h3>
-                    </div>
-                  </div>
-                  <div className="formula-chunk-list">
-                    {formulaDetails.chunks.map((chunk) => (
-                      <FormulaChunkCard key={chunk.chunkId} chunk={chunk} onOpenNote={onOpenNote} />
-                    ))}
-                  </div>
+                <div className="fw-notes">
+                  {formulaDetails.linkedNotes.map((note) => (
+                    <FormulaNoteRow key={note.noteId} note={note} onOpenNote={onOpenNote} />
+                  ))}
                 </div>
               </section>
 
-              <section className="surface">
-                <div className="surface__header">
-                  <div>
-                    <span className="surface__eyebrow">AI brief</span>
-                    <h3>Coach, practice, and derivation</h3>
-                  </div>
+              <section className="fw-section">
+                <div className="fw-section__header">
+                  <span className="surface__eyebrow">Source chunks</span>
+                  <h3>Reader context</h3>
+                </div>
+                <div className="fw-chunks">
+                  {formulaDetails.chunks.map((chunk) => (
+                    <FormulaChunkCard key={chunk.chunkId} chunk={chunk} onOpenNote={onOpenNote} />
+                  ))}
+                </div>
+              </section>
+
+              <section className="fw-section">
+                <div className="fw-section__header">
+                  <span className="surface__eyebrow">AI brief</span>
+                  <h3>Coach, practice, and derivation</h3>
                 </div>
                 {formulaDetails.brief ? (
                   <>
@@ -375,7 +366,7 @@ export function FormulaWorkspace({
             />
           )}
         </div>
-      </section>
+      </div>
     </div>
   );
 }
@@ -390,20 +381,15 @@ function FormulaListRow({
   onSelect: () => void;
 }) {
   return (
-    <article className={`row-item formula-list-row ${isActive ? "row-item--active formula-list-row--active" : ""}`}>
-      <button className="row-item__main" onClick={onSelect} type="button">
-        <div className="row-item__title-row">
-          <MathFormula
-            className="line-item__math formula-list-row__math"
-            latex={formula.latex}
-            showSource={false}
-            sourceClassName="math-formula__source line-item__title line-item__code"
-          />
-          <span className="soft-badge">{formula.noteCount} notes</span>
-        </div>
-        <span className="row-item__subtitle">{formula.sourceNoteTitles.slice(0, 3).join(" · ")}</span>
-      </button>
-    </article>
+    <button className={`fw-row ${isActive ? "fw-row--active" : ""}`} onClick={onSelect} type="button">
+      <MathFormula
+        className="fw-row__math"
+        latex={formula.latex}
+        showSource={false}
+        sourceClassName="math-formula__source fw-row__source"
+      />
+      <span className="fw-row__meta">{formula.sourceNoteTitles.slice(0, 3).join(" · ")}</span>
+    </button>
   );
 }
 
@@ -418,10 +404,10 @@ function FormulaNoteRow({
   const conceptChips = note.relatedConcepts.slice(0, 1).map((concept) => compactLabel(concept, 24));
 
   return (
-    <button className="line-item formula-note-card" onClick={() => onOpenNote(note.noteId)} type="button">
-      <span className="line-item__title">{note.title}</span>
-      <span className="line-item__subtitle">{shortenPath(note.relativePath)}</span>
-      <MarkdownContent className="formula-note-card__summary" text={formatMarkdownPreview(note.excerpt, 220)} />
+    <button className="fw-note" onClick={() => onOpenNote(note.noteId)} type="button">
+      <span className="fw-note__title">{note.title}</span>
+      <span className="fw-note__path">{shortenPath(note.relativePath)}</span>
+      <MarkdownContent className="fw-note__excerpt" text={formatMarkdownPreview(note.excerpt, 220)} />
       <div className="formula-chip-list">
         {headingChips.map((heading) => (
           <span key={`${note.noteId}-${heading}`} className="formula-chip">
@@ -434,7 +420,7 @@ function FormulaNoteRow({
           </span>
         ))}
       </div>
-      <span className="line-item__meta formula-note-card__meta">{note.formulaCount} formulas in this note</span>
+      <span className="fw-note__meta">{note.formulaCount} formulas in this note</span>
     </button>
   );
 }
@@ -449,8 +435,8 @@ function FormulaChunkCard({
   const headingLabel = compactLabel(formatHeadingPath(chunk.headingPath), 52);
 
   return (
-    <article className="formula-chunk">
-      <div className="surface__header">
+    <article className="fw-chunk">
+      <div className="fw-chunk__header">
         <div>
           <span className="surface__eyebrow">{headingLabel}</span>
           <h3>{chunk.noteTitle}</h3>
@@ -459,12 +445,12 @@ function FormulaChunkCard({
           Open note
         </button>
       </div>
-      <MarkdownContent className="formula-chunk__body" text={formatMarkdownPreview(chunk.text, 340)} />
+      <MarkdownContent className="fw-chunk__body" text={formatMarkdownPreview(chunk.text, 340)} />
       <div className="formula-chip-list">
         <span className="formula-chip">{headingLabel}</span>
         <span className="formula-chip formula-chip--muted">Chunk {chunk.ordinal + 1}</span>
       </div>
-      <span className="line-item__meta">{shortenPath(chunk.relativePath)}</span>
+      <span className="fw-chunk__meta">{shortenPath(chunk.relativePath)}</span>
     </article>
   );
 }
