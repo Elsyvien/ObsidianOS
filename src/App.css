@@ -529,15 +529,12 @@ code {
   position: sticky;
   top: 0;
   z-index: 20;
-  padding: 18px 28px 14px;
+  padding: 12px 24px 12px;
   border-bottom: 1px solid rgba(106, 175, 255, 0.05);
   background:
-    linear-gradient(180deg, rgba(8, 14, 22, 0.96) 0%, rgba(6, 10, 16, 0.92) 100%);
-  backdrop-filter: blur(32px) saturate(200%);
-  -webkit-backdrop-filter: blur(32px) saturate(200%);
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.02),
-    0 4px 18px rgba(0, 0, 0, 0.12);
+    linear-gradient(180deg, rgba(8, 14, 22, 0.85) 0%, rgba(5, 8, 14, 0.75) 100%);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
 }
 
 .topbar__inner {
@@ -546,43 +543,62 @@ code {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 24px;
+  gap: 20px;
+  position: relative;
+  z-index: 1;
 }
 
 .topbar__copy {
-  gap: 8px;
-}
-
-.topbar__summary {
-  margin: 0;
-  max-width: 72ch;
-  color: var(--text-soft);
-  font-size: 0.94rem;
+  gap: 4px;
 }
 
 .topbar__eyebrow {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.topbar__divider {
+  color: var(--line-strong);
 }
 
 .topbar__eyebrow strong {
   color: var(--text-soft);
-  font-size: 0.78rem;
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: none;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.topbar__meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 2px;
+}
+
+.topbar__summary {
+  margin: 0;
+  max-width: 64ch;
+  color: var(--text-soft);
+  font-size: 0.85rem;
 }
 
 .topbar h2 {
-  font-size: clamp(1.6rem, 2.6vw, 2.2rem);
-  line-height: 1;
+  font-size: clamp(1.35rem, 2vw, 1.95rem);
+  line-height: 1.05;
   letter-spacing: -0.03em;
 }
 
 .topbar__meta {
-  gap: 14px;
+  gap: 12px;
   align-items: flex-end;
 }
 
@@ -594,13 +610,14 @@ code {
 }
 
 .meta-pill {
-  padding: 5px 10px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.03);
   border-color: rgba(106, 175, 255, 0.08);
-  color: var(--muted);
-  font-size: 0.75rem;
-  font-family: var(--mono);
+  color: var(--text-soft);
+  font-size: 0.72rem;
+  font-family: inherit;
+  font-weight: 500;
   letter-spacing: 0.01em;
 }
 
@@ -2365,7 +2382,7 @@ code {
   }
 
   .topbar {
-    padding-top: 18px;
+    padding-top: 14px;
   }
 
   .content-pane,

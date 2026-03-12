@@ -34,6 +34,11 @@ export function Topbar({
 }: TopbarProps) {
   const isPreview = runtimeMode === "browser-preview";
   const canScan = isPreview || selectedCourse !== null;
+  const workspaceSummary = selectedCourse
+    ? `${selectedCourse.folder} · ${dashboard?.graph.noteCount ?? 0} indexed notes`
+    : isPreview
+      ? "Preview dataset loaded for layout review"
+      : "Select a course to start reviewing notes, formulas, and exam readiness";
   const headline = (() => {
     switch (activeView) {
       case "overview":
@@ -67,43 +72,54 @@ export function Topbar({
 
   return (
     <header className="topbar">
-      <div className="topbar__copy">
-        <div className="topbar__brand">
-          <BrandMark className="brand-mark brand-mark--topbar" />
-          <span>ObsidianOS</span>
+      <div className="topbar__inner">
+        <div className="topbar__copy">
+          <div className="topbar__eyebrow">
+            <div className="topbar__brand">
+              <BrandMark className="brand-mark brand-mark--topbar" />
+              <span>ObsidianOS</span>
+            </div>
+            <span className="topbar__divider">/</span>
+            <span>{title}</span>
+            {selectedCourse ? (
+              <>
+                <span className="topbar__divider">/</span>
+                <strong>{selectedCourse.folder}</strong>
+              </>
+            ) : null}
+          </div>
+          <h2>{headline}</h2>
+          <div className="topbar__meta-row">
+            <p className="topbar__summary">{workspaceSummary}</p>
+            <div className="meta-pills">
+              {statusItems.map((item) => (
+                <span key={item} className="meta-pill">
+                  {item}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
-        <span className="topbar__eyebrow">
-          {title}
-          {selectedCourse ? <strong>{selectedCourse.folder}</strong> : null}
-        </span>
-        <h2>{headline}</h2>
-        <div className="meta-pills">
-          {statusItems.map((item) => (
-            <span key={item} className="meta-pill">
-              {item}
-            </span>
-          ))}
-        </div>
-      </div>
 
-      <div className="topbar__meta">
-        <div className="topbar__actions">
-          {activeView === "ai" ? (
-            <button
-              className="button button--subtle"
-              disabled={!selectedCourse || busyAction !== null || aiStatus?.status === "running"}
-              onClick={onRunAi}
-              type="button"
-            >
-              {aiStatus?.status === "running" ? "AI running..." : "Run AI"}
+        <div className="topbar__meta">
+          <div className="topbar__actions">
+            {activeView === "ai" ? (
+              <button
+                className="button button--subtle"
+                disabled={!selectedCourse || busyAction !== null || aiStatus?.status === "running"}
+                onClick={onRunAi}
+                type="button"
+              >
+                {aiStatus?.status === "running" ? "AI running..." : "Run AI"}
+              </button>
+            ) : null}
+            <button className="button button--subtle" disabled={!canScan || busyAction !== null} onClick={onScan} type="button">
+              {busyAction === "Scan failed" ? "Scanning..." : "Scan vault"}
             </button>
-          ) : null}
-          <button className="button button--subtle" disabled={!canScan || busyAction !== null} onClick={onScan} type="button">
-            {busyAction === "Scan failed" ? "Scanning..." : "Scan vault"}
-          </button>
-          <button className="button button--ghost" disabled={busyAction !== null} onClick={onRefresh} type="button">
-            Refresh
-          </button>
+            <button className="button button--ghost" disabled={busyAction !== null} onClick={onRefresh} type="button">
+              Refresh
+            </button>
+          </div>
         </div>
       </div>
     </header>
