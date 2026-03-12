@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import mathJaxScriptUrl from "mathjax-full/es5/tex-svg-full.js?url";
+import mathJaxScriptUrl from "mathjax-full/es5/tex-chtml-full.js?url";
 
 type MathFormulaProps = {
   className?: string;
   display?: boolean;
+  inline?: boolean;
   latex: string;
   showSource?: boolean;
   sourceClassName?: string;
@@ -97,8 +98,8 @@ export function ensureMathJax() {
       ...(window.MathJax?.startup ?? {}),
       typeset: false,
     },
-    svg: {
-      fontCache: "none",
+    chtml: {
+      matchFontHeight: false,
     },
     tex: {
       packages: {
@@ -150,6 +151,7 @@ export function ensureMathJax() {
 export function MathFormula({
   className,
   display = true,
+  inline = false,
   latex,
   showSource = true,
   sourceClassName,
@@ -158,6 +160,7 @@ export function MathFormula({
   const [isTypeset, setIsTypeset] = useState(false);
   const sourceClasses = sourceClassName ?? "math-formula__source";
   const normalizedLatex = normalizeLatexSource(latex);
+  const ContainerTag = inline ? "span" : "div";
 
   useEffect(() => {
     let active = true;
@@ -198,7 +201,7 @@ export function MathFormula({
   }, [display, normalizedLatex]);
 
   return (
-    <div className={joinClasses("math-formula", className)}>
+    <ContainerTag className={joinClasses("math-formula", inline ? "math-formula--inline" : undefined, className)}>
       <span
         aria-label={normalizedLatex}
         className="math-formula__rendered"
@@ -206,6 +209,6 @@ export function MathFormula({
         ref={renderedRef}
       />
       {showSource || !isTypeset ? <code className={sourceClasses}>{normalizedLatex}</code> : null}
-    </div>
+    </ContainerTag>
   );
 }

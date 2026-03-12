@@ -1143,6 +1143,12 @@ code {
   width: 100%;
 }
 
+.math-formula--inline {
+  display: inline-grid;
+  width: auto;
+  vertical-align: middle;
+}
+
 .math-formula__rendered {
   display: block;
   width: 100%;
@@ -1159,11 +1165,17 @@ code {
 
 .math-formula__rendered mjx-container {
   margin: 0 !important;
+  max-width: none !important;
 }
 
-.math-formula__rendered svg {
-  max-width: 100%;
-  height: auto;
+.math-formula__rendered mjx-container[jax="CHTML"] {
+  white-space: nowrap;
+}
+
+.math-formula--inline .math-formula__rendered {
+  width: auto;
+  max-width: none;
+  overflow: visible;
 }
 
 .math-formula__source {
@@ -1616,6 +1628,11 @@ code {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.token-list__item--rich {
+  max-width: 100%;
+  align-items: center;
+}
+
 .token-list__item--math {
   display: grid;
   min-width: min(100%, 280px);
@@ -1625,6 +1642,10 @@ code {
 
 .token-list__item--code {
   color: var(--accent-strong);
+}
+
+.token-list__item--rich .md-p {
+  margin: 0;
 }
 
 .token-list__source {
@@ -1857,6 +1878,63 @@ code {
   border-radius: 16px;
   border: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(121, 187, 255, 0.08) 0%, rgba(255, 255, 255, 0.015) 100%);
+  position: relative;
+  overflow: hidden;
+  transition: border-color 220ms var(--ease-out), box-shadow 220ms var(--ease-out), transform 220ms var(--ease-out);
+}
+
+.formula-display::before,
+.fw-note::before,
+.fw-chunk::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 4px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-secondary) 100%);
+  opacity: 0;
+  transform: scaleY(0.68);
+  transform-origin: center;
+  transition: opacity 220ms var(--ease-out), transform 220ms var(--ease-out);
+}
+
+.formula-display::after,
+.fw-row::before,
+.fw-note::after,
+.fw-chunk::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 68px;
+  background: linear-gradient(90deg, rgba(121, 187, 255, 0.18) 0%, rgba(255, 184, 112, 0.12) 45%, transparent 100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms var(--ease-out);
+}
+
+.formula-display:hover {
+  border-color: rgba(121, 187, 255, 0.22);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+  transform: translateY(-1px);
+}
+
+.formula-display:hover::before,
+.formula-display:hover::after,
+.fw-row:hover::before,
+.fw-row--active::before,
+.fw-note:hover::before,
+.fw-note:hover::after,
+.fw-chunk:hover::before,
+.fw-chunk:hover::after {
+  opacity: 1;
+}
+
+.formula-display:hover::before,
+.fw-note:hover::before,
+.fw-chunk:hover::before {
+  transform: scaleY(1);
 }
 
 .formula-display__math {
@@ -2389,7 +2467,7 @@ code {
 .md-content .md-math--block {
   margin: 10px 0;
   padding: 8px 0;
-  text-align: center;
+  text-align: left;
   overflow-x: auto;
   color: var(--text);
 }
@@ -2403,9 +2481,43 @@ code {
 
 .md-content .md-math--display-inline {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   width: 100%;
   margin: 6px 0;
+}
+
+.md-content .md-math mjx-container {
+  margin: 0 !important;
+  max-width: none !important;
+}
+
+.md-content .md-math mjx-container[jax="CHTML"] {
+  white-space: nowrap;
+}
+
+.md-content .md-math--block .math-formula__rendered,
+.md-content .md-math--display-inline .math-formula__rendered {
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+  overflow: visible;
+}
+
+.md-content .md-math--block .math-formula__rendered mjx-container,
+.md-content .md-math--display-inline .math-formula__rendered mjx-container {
+  display: block;
+}
+
+.exam-answer-option__copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+}
+
+.exam-answer-option__copy .md-p,
+.line-item__meta .md-p,
+.surface__summary .md-p {
+  margin: 0;
 }
 
 .stats-mini-row__math {
@@ -2495,7 +2607,7 @@ code {
 .fw-layout {
   position: relative;
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 440px minmax(0, 1fr);
   height: clamp(42rem, calc(100vh - 11.5rem), 68rem);
   max-height: calc(100vh - 11.5rem);
   overflow: hidden;
@@ -2556,36 +2668,42 @@ code {
 .fw-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding-right: 4px;
-  margin: 0 -8px;
+  padding-right: 8px;
+  margin: 0;
 }
 
 .fw-row {
   display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  border-radius: 8px;
+  gap: 0;
+  padding: 20px 22px;
+  border-radius: 14px;
   border: none;
-  background: transparent;
-  text-align: left;
+  background: rgba(106, 175, 255, 0.02);
+  text-align: center;
+  justify-items: center;
+  align-content: center;
   cursor: pointer;
   color: inherit;
   font: inherit;
-  transition: background 150ms ease;
+  transition: background 150ms ease, border-color 150ms ease, transform 150ms ease;
   min-width: 0;
   position: relative;
+  border: 1px solid rgba(106, 175, 255, 0.08);
 }
 
 .fw-row:hover {
-  background: rgba(106, 175, 255, 0.06);
+  background: rgba(106, 175, 255, 0.07);
+  border-color: rgba(106, 175, 255, 0.14);
+  transform: translateY(-1px);
 }
 
 .fw-row--active {
   background: rgba(106, 175, 255, 0.10);
+  border-color: rgba(106, 175, 255, 0.18);
 }
 
 .fw-row--active::after {
@@ -2602,10 +2720,27 @@ code {
 .fw-row__math {
   min-width: 0;
   width: 100%;
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.fw-row__math .math-formula {
+  width: auto;
+  max-width: 100%;
+  flex-shrink: 0;
 }
 
 .fw-row__math .math-formula__rendered {
   color: var(--accent-strong);
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+}
+
+.fw-row__footer {
+  display: none;
 }
 
 .fw-row__source {
@@ -2615,10 +2750,15 @@ code {
 
 .fw-row__meta {
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.fw-row__count {
+  align-self: flex-start;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* ── Main pane ── */
@@ -2716,6 +2856,8 @@ code {
   font: inherit;
   transition: all 220ms var(--ease-out);
   min-width: 0;
+  position: relative;
+  overflow: hidden;
 }
 
 .fw-note:hover {
@@ -2773,6 +2915,9 @@ code {
   border: 1px solid var(--line);
   background: rgba(106, 175, 255, 0.02);
   min-width: 0;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 220ms var(--ease-out), box-shadow 220ms var(--ease-out), transform 220ms var(--ease-out);
 }
 
 .fw-chunk__header {
@@ -2808,6 +2953,12 @@ code {
   font-size: 0.78rem;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.fw-chunk:hover {
+  border-color: rgba(106, 175, 255, 0.15);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.14);
+  transform: translateY(-1px);
 }
 
 /* ── Responsive (fw) ── */

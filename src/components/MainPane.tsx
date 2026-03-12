@@ -539,7 +539,9 @@ export function MainPane({
                 <strong>Revision priorities</strong>
                 <ul>
                   {dashboard.ai.revisionPriorities.map((item) => (
-                    <li key={item}>{item}</li>
+                    <li key={item}>
+                      <MarkdownContent text={item} />
+                    </li>
                   ))}
                 </ul>
               </section>
@@ -547,7 +549,9 @@ export function MainPane({
                 <strong>Weak spots</strong>
                 <ul>
                   {dashboard.ai.weakSpots.map((item) => (
-                    <li key={item}>{item}</li>
+                    <li key={item}>
+                      <MarkdownContent text={item} />
+                    </li>
                   ))}
                 </ul>
               </section>
@@ -555,7 +559,9 @@ export function MainPane({
                 <strong>Next actions</strong>
                 <ul>
                   {dashboard.ai.nextActions.map((item) => (
-                    <li key={item}>{item}</li>
+                    <li key={item}>
+                      <MarkdownContent text={item} />
+                    </li>
                   ))}
                 </ul>
               </section>

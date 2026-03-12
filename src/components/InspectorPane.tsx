@@ -700,9 +700,9 @@ function TokenList({
             sourceClassName="math-formula__source token-list__source"
           />
         ) : (
-          <span key={item} className="token-list__item">
-            {item}
-          </span>
+          <div key={item} className="token-list__item token-list__item--rich">
+            <MarkdownContent text={item} />
+          </div>
         ),
       )}
     </div>

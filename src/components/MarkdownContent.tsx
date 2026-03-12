@@ -1,100 +1,18 @@
-import { useEffect, useRef } from "react";
+import { Fragment, useMemo, type ReactNode } from "react";
 
-import { ensureMathJax, normalizeLatexSource } from "./MathFormula";
-
-/**
- * Lightweight Markdown + LaTeX renderer.
- *
- * Handles the subset of markdown/LaTeX that commonly appears in Obsidian notes:
- * - Block math: `$$...$$`, `\[...\]`
- * - Inline math: `$...$`, `\(...\)`
- * - Bold: `**...**`
- * - Italic: `*...*`
- * - Obsidian wikilinks: `[[...]]`
- * - Headings: `# ...` through `### ...`
- * - Blockquotes: `> ...`
- *
- * Uses the same MathJax runtime already loaded by `MathFormula`.
- */
+import { MathFormula, normalizeLatexSource } from "./MathFormula";
 
 type MarkdownContentProps = {
   className?: string;
   text: string;
 };
 
+type InlineMathVariant = "inline" | "display-inline";
+
 export function MarkdownContent({ className, text }: MarkdownContentProps) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
+  const content = useMemo(() => markdownToNodes(text), [text]);
 
-  const html = markdownToHtml(text);
-
-  // After rendering, typeset any LaTeX that ended up in the DOM.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    let active = true;
-
-    const mathElements = [...el.querySelectorAll<HTMLElement>(".md-math")];
-    if (mathElements.length === 0) return;
-
-    void ensureMathJax()
-      .then(async () => {
-        if (!active || !window.MathJax?.typesetPromise) return;
-
-        for (const element of mathElements) {
-          const latex = element.dataset.latex ?? "";
-          const display = element.dataset.display === "block";
-          element.dataset.typeset = "false";
-          element.textContent = display ? `\\[${latex}\\]` : `\\(${latex}\\)`;
-        }
-
-        window.MathJax.typesetClear?.(mathElements);
-        window.MathJax.texReset?.();
-        await window.MathJax.typesetPromise(mathElements);
-
-        if (!active) {
-          return;
-        }
-
-        for (const element of mathElements) {
-          element.dataset.typeset = "true";
-        }
-      })
-      .catch((error) => {
-        for (const element of mathElements) {
-          element.textContent = element.dataset.latex ?? "";
-          element.dataset.typeset = "true";
-        }
-
-        console.error("Failed to render markdown LaTeX", { error, text });
-      });
-
-    return () => {
-      active = false;
-      if (window.MathJax?.typesetClear) {
-        window.MathJax.typesetClear(mathElements);
-      }
-    };
-  }, [html]);
-
-  return (
-    <div
-      className={`md-content ${className ?? ""}`}
-      ref={containerRef}
-      // biome-ignore lint/security/noDangerouslySetInnerHtml: controlled markdown parsing
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
-  );
-}
-
-/* ── Markdown → HTML converter ────────────────────── */
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  return <div className={`md-content ${className ?? ""}`}>{content}</div>;
 }
 
 function normalizeMarkdownSource(source: string): string {
@@ -109,114 +27,160 @@ function normalizeMarkdownSource(source: string): string {
   return unescaped.replace(/\\\s+([\[\]\(\)])/g, "\\$1");
 }
 
-function renderMathPlaceholder(latex: string, variant: "block" | "inline" | "display-inline") {
-  const normalizedLatex = normalizeLatexSource(latex);
-  const className =
-    variant === "block"
-      ? "md-math md-math--block"
-      : variant === "display-inline"
-        ? "md-math md-math--inline md-math--display-inline"
-        : "md-math md-math--inline";
-  const tagName = variant === "block" || variant === "display-inline" ? "div" : "span";
-  const displayMode = variant === "block" ? "block" : "inline";
-  const encodedLatex = escapeHtml(normalizedLatex);
-
-  return `<${tagName} class="${className}" data-display="${displayMode}" data-latex="${encodedLatex}" data-typeset="false" aria-label="${encodedLatex}"></${tagName}>`;
-}
-
-function markdownToHtml(source: string): string {
+function markdownToNodes(source: string): ReactNode[] {
   const normalizedSource = normalizeMarkdownSource(source);
-
-  // First, split by block math ($$...$$, \[...\]) — these are paragraphs on their own.
   const parts = normalizedSource.split(/(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\])/g);
 
-  const rendered = parts.map((part) => {
-    // Block math
+  const output: ReactNode[] = [];
+
+  parts.forEach((part, index) => {
+    if (!part) {
+      return;
+    }
+
     if (part.startsWith("$$") && part.endsWith("$$")) {
-      const latex = part.slice(2, -2).trim();
-      return renderMathPlaceholder(latex, "block");
+      output.push(renderBlockMath(part.slice(2, -2), `block-math-${index}`));
+      return;
     }
 
     if (part.startsWith("\\[") && part.endsWith("\\]")) {
-      const latex = part.slice(2, -2).trim();
-      return renderMathPlaceholder(latex, "block");
+      output.push(renderBlockMath(part.slice(2, -2), `slash-block-math-${index}`));
+      return;
     }
 
-    // Process line-by-line for the rest
-    return processInlineBlock(part);
+    output.push(...processInlineBlock(part, `block-${index}`));
   });
 
-  return rendered.join("");
+  return output;
 }
 
-function processInlineBlock(block: string): string {
+function renderBlockMath(latex: string, key: string) {
+  return (
+    <MathFormula
+      key={key}
+      className="md-math md-math--block"
+      latex={normalizeLatexSource(latex)}
+      showSource={false}
+    />
+  );
+}
+
+function renderInlineMath(latex: string, key: string, variant: InlineMathVariant = "inline") {
+  const className =
+    variant === "display-inline"
+      ? "md-math md-math--inline md-math--display-inline"
+      : "md-math md-math--inline";
+  const inline = variant === "inline";
+
+  return (
+    <MathFormula
+      key={key}
+      className={className}
+      display={false}
+      inline={inline}
+      latex={normalizeLatexSource(latex)}
+      showSource={false}
+    />
+  );
+}
+
+function processInlineBlock(block: string, keyPrefix: string): ReactNode[] {
   const lines = block.split("\n");
-  const output: string[] = [];
+  const output: ReactNode[] = [];
   const paragraph: string[] = [];
-  let inBlockquote = false;
+  const blockquote: string[] = [];
 
   const flushParagraph = () => {
     if (paragraph.length === 0) {
       return;
     }
 
-    output.push(`<p class="md-p">${processInline(paragraph.join(" "))}</p>`);
+    output.push(
+      <p className="md-p" key={`${keyPrefix}-p-${output.length}`}>
+        {parseInline(paragraph.join(" "), `${keyPrefix}-p-${output.length}`)}
+      </p>,
+    );
     paragraph.length = 0;
+  };
+
+  const flushBlockquote = () => {
+    if (blockquote.length === 0) {
+      return;
+    }
+
+    output.push(
+      <blockquote className="md-blockquote" key={`${keyPrefix}-quote-${output.length}`}>
+        {blockquote.map((entry, index) => (
+          <p key={`${keyPrefix}-quote-line-${index}`}>
+            {parseInline(entry, `${keyPrefix}-quote-line-${index}`)}
+          </p>
+        ))}
+      </blockquote>,
+    );
+    blockquote.length = 0;
   };
 
   for (const raw of lines) {
     const line = raw.trim();
 
-    // Empty line → close blockquote if open, add spacing
-    if (!line.trim()) {
+    if (!line) {
       flushParagraph();
-      if (inBlockquote) {
-        output.push("</blockquote>");
-        inBlockquote = false;
-      }
+      flushBlockquote();
       continue;
     }
 
-    // Headings
     const headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
     if (headingMatch) {
       flushParagraph();
-      const level = headingMatch[1].length;
-      const content = processInline(headingMatch[2]);
-      output.push(`<h${level + 2} class="md-heading">${content}</h${level + 2}>`);
+      flushBlockquote();
+      const level = headingMatch[1].length + 2;
+      const headingContent = parseInline(headingMatch[2], `${keyPrefix}-heading-${output.length}`);
+
+      if (level === 3) {
+        output.push(
+          <h3 className="md-heading" key={`${keyPrefix}-heading-${output.length}`}>
+            {headingContent}
+          </h3>,
+        );
+      } else if (level === 4) {
+        output.push(
+          <h4 className="md-heading" key={`${keyPrefix}-heading-${output.length}`}>
+            {headingContent}
+          </h4>,
+        );
+      } else {
+        output.push(
+          <h5 className="md-heading" key={`${keyPrefix}-heading-${output.length}`}>
+            {headingContent}
+          </h5>,
+        );
+      }
       continue;
     }
 
-    // Blockquote
     if (line.startsWith("> ") || line === ">") {
       flushParagraph();
-      const content = processInline(line.slice(2));
-      if (!inBlockquote) {
-        output.push('<blockquote class="md-blockquote">');
-        inBlockquote = true;
-      }
-      output.push(`<p>${content}</p>`);
+      blockquote.push(line === ">" ? "" : line.slice(2));
       continue;
     }
 
-    // Close open blockquote for non-quote lines
-    if (inBlockquote) {
-      output.push("</blockquote>");
-      inBlockquote = false;
-    }
+    flushBlockquote();
 
-    // List items
     const listMatch = line.match(/^[-*]\s+(.+)$/);
     if (listMatch) {
       flushParagraph();
-      output.push(`<div class="md-list-item">• ${processInline(listMatch[1])}</div>`);
+      output.push(
+        <div className="md-list-item" key={`${keyPrefix}-list-${output.length}`}>
+          {"• "}
+          {parseInline(listMatch[1], `${keyPrefix}-list-${output.length}`)}
+        </div>,
+      );
       continue;
     }
 
-    // Horizontal rule
-    if (/^-{3,}$/.test(line.trim())) {
+    if (/^-{3,}$/.test(line)) {
       flushParagraph();
-      output.push('<hr class="md-hr" />');
+      output.push(<hr className="md-hr" key={`${keyPrefix}-hr-${output.length}`} />);
       continue;
     }
 
@@ -224,71 +188,73 @@ function processInlineBlock(block: string): string {
   }
 
   flushParagraph();
+  flushBlockquote();
 
-  if (inBlockquote) {
-    output.push("</blockquote>");
-  }
-
-  return output.join("");
+  return output;
 }
 
-function processInline(text: string): string {
-  let remaining = escapeHtml(text);
-  const mathSegments: string[] = [];
+function parseInline(text: string, keyPrefix: string): ReactNode[] {
+  const output: ReactNode[] = [];
+  const pattern =
+    /(\$\$[\s\S]*?\$\$|\$[^$\n]+?\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\*\*(.+?)\*\*|\*(.+?)\*|\[\[([^\]]+?)\]\]|`([^`]+?)`)/g;
 
-  const stashMath = (html: string) => {
-    const token = `@@MD_MATH_${mathSegments.length}@@`;
-    mathSegments.push(html);
-    return token;
-  };
+  let lastIndex = 0;
+  let matchIndex = 0;
+  let match: RegExpExecArray | null;
 
-  // Process inline patterns in order of priority.
-  // Math is stashed first so markdown formatting cannot corrupt LaTeX content.
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      output.push(text.slice(lastIndex, match.index));
+    }
 
-  // Inline math: $...$  (but not $$)
-  remaining = remaining.replace(
-    /\$([^$\n]+?)\$/g,
-    (_m, latex: string) =>
-      stashMath(renderMathPlaceholder(latex, "inline")),
+    const fullMatch = match[0];
+    const key = `${keyPrefix}-${matchIndex}`;
+
+    if (fullMatch.startsWith("$$") && fullMatch.endsWith("$$")) {
+      output.push(renderInlineMath(fullMatch.slice(2, -2), key, "display-inline"));
+    } else if (fullMatch.startsWith("$") && fullMatch.endsWith("$")) {
+      output.push(renderInlineMath(fullMatch.slice(1, -1), key));
+    } else if (fullMatch.startsWith("\\[") && fullMatch.endsWith("\\]")) {
+      output.push(renderInlineMath(fullMatch.slice(2, -2), key, "display-inline"));
+    } else if (fullMatch.startsWith("\\(") && fullMatch.endsWith("\\)")) {
+      output.push(renderInlineMath(fullMatch.slice(2, -2), key));
+    } else if (fullMatch.startsWith("**") && fullMatch.endsWith("**")) {
+      output.push(
+        <strong className="md-bold" key={key}>
+          {parseInline(fullMatch.slice(2, -2), `${key}-bold`)}
+        </strong>,
+      );
+    } else if (fullMatch.startsWith("*") && fullMatch.endsWith("*")) {
+      output.push(
+        <em className="md-italic" key={key}>
+          {parseInline(fullMatch.slice(1, -1), `${key}-italic`)}
+        </em>,
+      );
+    } else if (fullMatch.startsWith("[[") && fullMatch.endsWith("]]")) {
+      output.push(
+        <span className="md-wikilink" key={key}>
+          {fullMatch.slice(2, -2)}
+        </span>,
+      );
+    } else if (fullMatch.startsWith("`") && fullMatch.endsWith("`")) {
+      output.push(
+        <code className="md-code" key={key}>
+          {fullMatch.slice(1, -1)}
+        </code>,
+      );
+    } else {
+      output.push(fullMatch);
+    }
+
+    lastIndex = match.index + fullMatch.length;
+    matchIndex += 1;
+  }
+
+  if (lastIndex < text.length) {
+    output.push(text.slice(lastIndex));
+  }
+
+  return output.map((node, index) =>
+    typeof node === "string" ? <Fragment key={`${keyPrefix}-text-${index}`}>{node}</Fragment> : node,
   );
-
-  // Inline math: \[...\]
-  remaining = remaining.replace(
-    /\\\[([\s\S]+?)\\\]/g,
-    (_m, latex: string) =>
-      stashMath(renderMathPlaceholder(latex, "display-inline")),
-  );
-
-  // Inline math: \(...\)
-  remaining = remaining.replace(
-    /\\\(([\s\S]+?)\\\)/g,
-    (_m, latex: string) =>
-      stashMath(renderMathPlaceholder(latex, "inline")),
-  );
-
-  // Bold: **...**
-  remaining = remaining.replace(
-    /\*\*(.+?)\*\*/g,
-    (_m, content: string) => `<strong class="md-bold">${content}</strong>`,
-  );
-
-  // Italic: *...*
-  remaining = remaining.replace(
-    /\*(.+?)\*/g,
-    (_m, content: string) => `<em class="md-italic">${content}</em>`,
-  );
-
-  // Wikilinks: [[...]]
-  remaining = remaining.replace(
-    /\[\[([^\]]+?)\]\]/g,
-    (_m, content: string) => `<span class="md-wikilink">${content}</span>`,
-  );
-
-  // Inline code: `...`
-  remaining = remaining.replace(
-    /`([^`]+?)`/g,
-    (_m, content: string) => `<code class="md-code">${content}</code>`,
-  );
-
-  return remaining.replace(/@@MD_MATH_(\d+)@@/g, (_m, index: string) => mathSegments[Number(index)] ?? "");
 }

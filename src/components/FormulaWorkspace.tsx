@@ -384,11 +384,17 @@ function FormulaListRow({
     <button className={`fw-row ${isActive ? "fw-row--active" : ""}`} onClick={onSelect} type="button">
       <MathFormula
         className="fw-row__math"
+        display={false}
         latex={formula.latex}
         showSource={false}
         sourceClassName="math-formula__source fw-row__source"
       />
-      <span className="fw-row__meta">{formula.sourceNoteTitles.slice(0, 3).join(" · ")}</span>
+      <div className="fw-row__footer">
+        <span className="soft-badge fw-row__count">
+          {formula.noteCount} {formula.noteCount === 1 ? "note" : "notes"}
+        </span>
+        <span className="fw-row__meta">{formula.sourceNoteTitles.slice(0, 3).join(" · ")}</span>
+      </div>
     </button>
   );
 }

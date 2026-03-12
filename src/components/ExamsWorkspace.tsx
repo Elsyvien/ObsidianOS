@@ -631,7 +631,7 @@ function ExamQuestionCard({
                   onChange={() => onChangeAnswer(option)}
                   type="radio"
                 />
-                <span>{option}</span>
+                <MarkdownContent className="exam-answer-option__copy" text={option} />
               </label>
             ))}
           </div>
@@ -741,7 +741,7 @@ function ExamResultView({
           <Metric label="Partial" value={String(result.partialCount)} />
           <Metric label="Incorrect" value={String(result.incorrectCount)} />
         </div>
-        <p className="surface__summary">{result.overallFeedback}</p>
+        <MarkdownContent className="surface__summary" text={result.overallFeedback} />
       </section>
 
       <section className="surface surface--split">
@@ -758,10 +758,10 @@ function ExamResultView({
                 <span className="line-item__title">
                   Q{question.index} · {question.verdict}
                 </span>
-                <span className="line-item__meta">{question.prompt}</span>
-                <span className="line-item__meta">Your answer: {renderAnswer(question.userAnswer)}</span>
-                <span className="line-item__meta">Expected: {question.expectedAnswer}</span>
-                <span className="line-item__meta">{question.feedback}</span>
+                <MarkdownContent className="line-item__meta" text={question.prompt} />
+                <MarkdownContent className="line-item__meta" text={`Your answer: ${renderAnswer(question.userAnswer)}`} />
+                <MarkdownContent className="line-item__meta" text={`Expected: ${question.expectedAnswer}`} />
+                <MarkdownContent className="line-item__meta" text={question.feedback} />
               </div>
             ))}
           </div>
@@ -784,7 +784,7 @@ function ExamResultView({
                   <span className="line-item__meta">
                     {suggestion.accuracy}% accuracy · suggested {suggestion.recommendedState}
                   </span>
-                  <span className="line-item__meta">{suggestion.reason}</span>
+                  <MarkdownContent className="line-item__meta" text={suggestion.reason} />
                   <div className="exam-review-actions">
                     <select
                       onChange={(event) =>
@@ -866,7 +866,9 @@ function ContextList({ items, title }: { items: string[]; title: string }) {
       <strong>{title}</strong>
       <ul>
         {items.slice(0, 5).map((item) => (
-          <li key={`${title}-${item}`}>{item}</li>
+          <li key={`${title}-${item}`}>
+            <MarkdownContent text={item} />
+          </li>
         ))}
       </ul>
     </div>

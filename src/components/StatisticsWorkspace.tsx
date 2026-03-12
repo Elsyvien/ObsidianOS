@@ -24,7 +24,7 @@ import type {
   StatisticsScope,
   StatisticsValuePoint,
 } from "../types";
-import { MathFormula } from "./MathFormula";
+import { looksLikeLatex, MathFormula } from "./MathFormula";
 
 type StatisticsSection = "overview" | "knowledge" | "notes" | "exams" | "ai" | "outputs" | "vault-activity" | "git";
 
@@ -714,10 +714,6 @@ function MiniMetricList({ items }: { items: Array<{ label: string; value: string
       ))}
     </div>
   );
-}
-
-function looksLikeLatex(value: string) {
-  return /\\[A-Za-z]+|[_^{}]|\$/.test(value);
 }
 
 function NoteRowsList({ rows, emptyMessage }: { rows: Array<StatisticsNoteRow | GitNoteActivityRow>; emptyMessage: string }) {
