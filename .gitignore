@@ -7,11 +7,35 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Environment and local config
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
 node_modules
 dist
 dist-ssr
+coverage
+*.tsbuildinfo
 *.local
 src-tauri/target-codex/
+
+# Windows-local files
+.vs/
+Thumbs.db
+Desktop.ini
+
+# Temporary repo surgery files
+fix-row-item.mjs
+fix-row-item2.mjs
+fix1.cjs
+orig_app.css
+patch_app.cjs
+patch_chat.js
+replace.mjs
+replace_radii.mjs
 
 # Editor directories and files
 .vscode/*

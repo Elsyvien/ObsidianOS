@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { ensureMathJax } from "./MathFormula";
+import { ensureMathJax, normalizeLatexSource } from "./MathFormula";
 
 /**
  * Lightweight Markdown + LaTeX renderer.
@@ -34,23 +34,45 @@ export function MarkdownContent({ className, text }: MarkdownContentProps) {
 
     let active = true;
 
-    const mathElements = el.querySelectorAll<HTMLElement>(".md-math");
+    const mathElements = [...el.querySelectorAll<HTMLElement>(".md-math")];
     if (mathElements.length === 0) return;
 
     void ensureMathJax()
       .then(async () => {
         if (!active || !window.MathJax?.typesetPromise) return;
-        window.MathJax.typesetClear?.([...mathElements]);
-        await window.MathJax.typesetPromise([...mathElements]);
+
+        for (const element of mathElements) {
+          const latex = element.dataset.latex ?? "";
+          const display = element.dataset.display === "block";
+          element.dataset.typeset = "false";
+          element.textContent = display ? `\\[${latex}\\]` : `\\(${latex}\\)`;
+        }
+
+        window.MathJax.typesetClear?.(mathElements);
+        window.MathJax.texReset?.();
+        await window.MathJax.typesetPromise(mathElements);
+
+        if (!active) {
+          return;
+        }
+
+        for (const element of mathElements) {
+          element.dataset.typeset = "true";
+        }
       })
       .catch((error) => {
+        for (const element of mathElements) {
+          element.textContent = element.dataset.latex ?? "";
+          element.dataset.typeset = "true";
+        }
+
         console.error("Failed to render markdown LaTeX", { error, text });
       });
 
     return () => {
       active = false;
       if (window.MathJax?.typesetClear) {
-        window.MathJax.typesetClear([...mathElements]);
+        window.MathJax.typesetClear(mathElements);
       }
     };
   }, [html]);
@@ -76,9 +98,30 @@ function escapeHtml(s: string): string {
 }
 
 function normalizeMarkdownSource(source: string): string {
-  return source
-    .replace(/\r\n?/g, "\n")
-    .replace(/\\\s+([\[\]\(\)])/g, "\\$1");
+  const normalized = source.replace(/\r\n?/g, "\n");
+  const escapedDelimiterCount = (normalized.match(/\\\\[\[\]()]/g) ?? []).length;
+  const escapedCommandCount = (normalized.match(/\\\\[A-Za-z]/g) ?? []).length;
+  const unescaped =
+    escapedDelimiterCount > 0 || escapedCommandCount >= 2
+      ? normalized.replace(/\\\\/g, "\\")
+      : normalized;
+
+  return unescaped.replace(/\\\s+([\[\]\(\)])/g, "\\$1");
+}
+
+function renderMathPlaceholder(latex: string, variant: "block" | "inline" | "display-inline") {
+  const normalizedLatex = normalizeLatexSource(latex);
+  const className =
+    variant === "block"
+      ? "md-math md-math--block"
+      : variant === "display-inline"
+        ? "md-math md-math--inline md-math--display-inline"
+        : "md-math md-math--inline";
+  const tagName = variant === "block" || variant === "display-inline" ? "div" : "span";
+  const displayMode = variant === "block" ? "block" : "inline";
+  const encodedLatex = escapeHtml(normalizedLatex);
+
+  return `<${tagName} class="${className}" data-display="${displayMode}" data-latex="${encodedLatex}" data-typeset="false" aria-label="${encodedLatex}"></${tagName}>`;
 }
 
 function markdownToHtml(source: string): string {
@@ -91,12 +134,12 @@ function markdownToHtml(source: string): string {
     // Block math
     if (part.startsWith("$$") && part.endsWith("$$")) {
       const latex = part.slice(2, -2).trim();
-      return `<div class="md-math md-math--block">\\[${escapeHtml(latex)}\\]</div>`;
+      return renderMathPlaceholder(latex, "block");
     }
 
     if (part.startsWith("\\[") && part.endsWith("\\]")) {
       const latex = part.slice(2, -2).trim();
-      return `<div class="md-math md-math--block">\\[${escapeHtml(latex)}\\]</div>`;
+      return renderMathPlaceholder(latex, "block");
     }
 
     // Process line-by-line for the rest
@@ -206,21 +249,21 @@ function processInline(text: string): string {
   remaining = remaining.replace(
     /\$([^$\n]+?)\$/g,
     (_m, latex: string) =>
-      stashMath(`<span class="md-math md-math--inline">\\(${latex}\\)</span>`),
+      stashMath(renderMathPlaceholder(latex, "inline")),
   );
 
   // Inline math: \[...\]
   remaining = remaining.replace(
-    /\\\[([^\n]+?)\\\]/g,
+    /\\\[([\s\S]+?)\\\]/g,
     (_m, latex: string) =>
-      stashMath(`<span class="md-math md-math--inline md-math--display-inline">\\(${latex}\\)</span>`),
+      stashMath(renderMathPlaceholder(latex, "display-inline")),
   );
 
   // Inline math: \(...\)
   remaining = remaining.replace(
-    /\\\(([^\n]+?)\\\)/g,
+    /\\\(([\s\S]+?)\\\)/g,
     (_m, latex: string) =>
-      stashMath(`<span class="md-math md-math--inline">\\(${latex}\\)</span>`),
+      stashMath(renderMathPlaceholder(latex, "inline")),
   );
 
   // Bold: **...**
