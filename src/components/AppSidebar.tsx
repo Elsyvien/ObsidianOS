@@ -56,25 +56,67 @@ type AppSidebarProps = {
 
 export function AppSidebar({
   activeView,
+  connected,
   courses,
   logCount,
+  runtimeMode,
   selectedCourseId,
+  vaultPath,
   onChangeView,
   onSelectCourse,
 }: AppSidebarProps) {
   // Auto-expand the group that contains the active view
   const activeGroupLabel = NAV_GROUPS.find((g) => g.views.includes(activeView))?.label ?? "";
+  const selectedCourse = courses.find((course) => course.id === selectedCourseId) ?? null;
+  const vaultPathSegments = vaultPath.split(/[\\/]/).filter(Boolean);
+  const vaultName = vaultPathSegments[vaultPathSegments.length - 1] ?? vaultPath;
+  const focusTitle = selectedCourse?.name ?? (runtimeMode === "browser-preview" ? "Preview workspace" : connected ? "Choose a course" : "Connect a vault");
+  const focusSummary = selectedCourse
+    ? `${Math.round(selectedCourse.coverage)}% coverage · ${selectedCourse.noteCount} notes · ${selectedCourse.weakNoteCount} weak`
+    : runtimeMode === "browser-preview"
+      ? "Demo data is loaded so the interface can be reviewed without a local vault."
+      : connected
+        ? `Vault ${vaultName || "connected"} is ready. Pick a course to open its study lanes.`
+        : "Connect the Obsidian vault to index notes, formulas, and exam outputs.";
 
   return (
     <aside className="sidebar">
       <div className="sidebar__brand">
         <div className="sidebar__brand-lockup">
           <BrandMark className="brand-mark brand-mark--sidebar" />
-          <div>
+          <div className="sidebar__brand-copy">
+            <span className="sidebar__eyebrow">Study cockpit</span>
             <h1>ObsidianOS</h1>
           </div>
         </div>
       </div>
+
+      <section className="sidebar__focus" aria-label="Workspace summary">
+        <div className="sidebar__status-row">
+          <span
+            className={`sidebar__status-pill ${
+              connected || runtimeMode === "browser-preview" ? "sidebar__status-pill--active" : ""
+            }`}
+          >
+            {runtimeMode === "browser-preview" ? "Preview mode" : connected ? "Vault linked" : "Setup required"}
+          </span>
+          <span className="sidebar__status-pill sidebar__status-pill--muted">{courses.length} courses</span>
+        </div>
+        <div className="sidebar__focus-copy">
+          <strong>{focusTitle}</strong>
+          <p>{focusSummary}</p>
+        </div>
+        <div className="sidebar__focus-metrics">
+          <div>
+            <span>Exam</span>
+            <strong>{selectedCourse?.examDate ? formatDate(selectedCourse.examDate) : "Unset"}</strong>
+          </div>
+          <div>
+            <span>{selectedCourse ? "Notes" : "Courses"}</span>
+            <strong>{selectedCourse ? String(selectedCourse.noteCount) : String(courses.length)}</strong>
+          </div>
+        </div>
+      </section>
 
       {/* ── Study nav (grouped) ───────────────── */}
       <SidebarSection label="Study">

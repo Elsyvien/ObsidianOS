@@ -93,6 +93,61 @@ export function MainPane({
     }) ?? [];
   const selectedQueue = dashboard?.notes.filter((note) => selectedNoteIds.includes(note.id)) ?? [];
   const aiWorkbench = buildAiWorkbench(dashboard);
+  const overviewSummary = selectedCourse
+    ? `${selectedCourse.folder} is active. ${dashboard?.graph.noteCount ?? 0} notes are indexed, ${dashboard?.weakNotes.length ?? 0} still need stronger links, and ${dashboard?.flashcards.totalCards ?? 0} flashcards are ready to reuse.`
+    : "Choose a course from the sidebar to review its scan and revision state.";
+  const overviewPills = [
+    {
+      label: "Coverage",
+      value: dashboard ? `${clampPercent(dashboard.coverage.percentage)}%` : "--",
+    },
+    {
+      label: "Indexed",
+      value: dashboard ? `${dashboard.graph.noteCount} notes` : "--",
+    },
+    {
+      label: "Outputs",
+      value: dashboard ? `${dashboard.flashcards.totalCards} cards` : "--",
+    },
+  ];
+  const overviewFocusCards = [
+    dashboard?.weakNotes[0]
+      ? {
+          label: "Weakest note",
+          title: dashboard.weakNotes[0].title,
+          detail:
+            dashboard.weakNotes[0].suggestions[0] ?? `Weakness ${dashboard.weakNotes[0].score.toFixed(2)}`,
+        }
+      : {
+          label: "Weak links",
+          title: "Healthy graph",
+          detail: "No weak notes surfaced for the current course.",
+        },
+    dashboard?.topConcepts[0]
+      ? {
+          label: "Priority concept",
+          title: dashboard.topConcepts[0].name,
+          detail: `${dashboard.topConcepts[0].noteCount} notes · support ${dashboard.topConcepts[0].supportScore.toFixed(1)}`,
+        }
+      : {
+          label: "Concept coverage",
+          title: "Awaiting anchors",
+          detail: "Run a scan to map the central concepts across the course.",
+        },
+    dashboard?.ai.nextActions[0]
+      ? {
+          label: "Next move",
+          title: dashboard.ai.nextActions[0],
+          detail: dashboard.ai.summary ?? "Generated from the current course AI workspace.",
+        }
+      : {
+          label: "Next move",
+          title: selectedCourse ? "Queue review work" : "Pick a course",
+          detail: selectedCourse
+            ? "Use notes, exams, or AI to turn the next pass into a concrete task."
+            : "The overview fills in once a course is active.",
+        },
+  ];
   const scanNotice = isScanning ? (
     <section className="surface surface--status">
       <span className="surface__eyebrow">Indexing</span>
@@ -842,18 +897,34 @@ export function MainPane({
       {scanNotice}
       <section className="surface surface--hero surface--overview">
         <div className="overview-hero">
-          <div>
+          <div className="overview-hero__copy">
             <span className="surface__eyebrow">Active course</span>
             <h3>{selectedCourse?.name ?? "No course selected"}</h3>
-            <p>
-              {selectedCourse
-                ? `${selectedCourse.folder} · ${dashboard?.graph.noteCount ?? 0} indexed notes`
-                : "Choose a course from the sidebar to review its scan and revision state."}
-            </p>
+            <p className="overview-hero__summary">{overviewSummary}</p>
+            <div className="overview-pill-row">
+              {overviewPills.map((item) => (
+                <span key={item.label} className="overview-pill">
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
+                </span>
+              ))}
+            </div>
           </div>
-          <div className="countdown-panel">
-            <strong>{dashboard?.countdown.daysRemaining ?? "--"}</strong>
-            <span>{dashboard?.countdown.label ?? "No exam scheduled"}</span>
+          <div className="overview-rail">
+            <div className="countdown-panel">
+              <span className="countdown-panel__label">Exam horizon</span>
+              <strong>{dashboard?.countdown.daysRemaining ?? "--"}</strong>
+              <span>{dashboard?.countdown.label ?? "No exam scheduled"}</span>
+            </div>
+            <div className="overview-focus-grid">
+              {overviewFocusCards.map((item) => (
+                <article key={item.label} className="overview-focus-card">
+                  <span>{item.label}</span>
+                  <strong>{item.title}</strong>
+                  <p>{item.detail}</p>
+                </article>
+              ))}
+            </div>
           </div>
         </div>
         <div className="metric-strip metric-strip--overview">

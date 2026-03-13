@@ -69,6 +69,20 @@ export function Topbar({
     activeView === "ai" && aiStatus ? `AI ${aiStatus.status}` : null,
     scanStatus?.lastScanAt ? `Last scan ${formatDateTime(scanStatus.lastScanAt)}` : "No scan yet",
   ].filter(Boolean);
+  const signalCards = [
+    {
+      label: "Graph",
+      value: dashboard ? String(dashboard.graph.edgeCount) : "--",
+    },
+    {
+      label: "Exam",
+      value: dashboard?.countdown.daysRemaining != null ? `${dashboard.countdown.daysRemaining}d` : "Unset",
+    },
+    {
+      label: "AI",
+      value: aiStatus ? `${aiStatus.readyNotes}/${aiStatus.totalNotes}` : "--",
+    },
+  ];
 
   return (
     <header className="topbar">
@@ -88,9 +102,11 @@ export function Topbar({
               </>
             ) : null}
           </div>
-          <h2>{headline}</h2>
-          <div className="topbar__meta-row">
+          <div className="topbar__headline-copy">
+            <h2>{headline}</h2>
             <p className="topbar__summary">{workspaceSummary}</p>
+          </div>
+          <div className="topbar__meta-row">
             <div className="meta-pills">
               {statusItems.map((item) => (
                 <span key={item} className="meta-pill">
@@ -102,6 +118,14 @@ export function Topbar({
         </div>
 
         <div className="topbar__meta">
+          <div className="topbar__signal-grid">
+            {signalCards.map((item) => (
+              <div key={item.label} className="topbar__signal">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </div>
+            ))}
+          </div>
           <div className="topbar__actions">
             {activeView === "ai" ? (
               <button
