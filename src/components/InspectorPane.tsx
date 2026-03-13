@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { buildNoteCoach } from "../aiWorkbench";
 import { formatDate, formatDateTime, shortenPath, type CourseDraft } from "../lib";
 import type {
+  AppMetadata,
   AiSettingsInput,
   CourseConfig,
   ExamDefaults,
@@ -19,6 +20,7 @@ type EditableCourseField = "name" | "folder" | "examDate" | "revisionFolder" | "
 
 type InspectorPaneProps = {
   activeView: AppView;
+  appMetadata: AppMetadata;
   aiDraft: AiSettingsInput;
   busyAction: string | null;
   courseDraft: CourseDraft;
@@ -53,6 +55,7 @@ type InspectorPaneProps = {
 
 export function InspectorPane({
   activeView,
+  appMetadata,
   aiDraft,
   busyAction,
   courseDraft,
@@ -455,6 +458,22 @@ export function InspectorPane({
 
       {activeView === "settings" ? (
         <>
+          <InspectorSection eyebrow="About" title={appMetadata.productName}>
+            <div className="about-panel__headline">
+              <span className="about-panel__version">{appMetadata.versionDisplay}</span>
+              <h4>{appMetadata.codename}</h4>
+              <p className="inspector-copy">
+                First alpha desktop build for vault-connected study workflows.
+              </p>
+            </div>
+            <dl className="about-panel__facts">
+              <InspectorItem label="Version" value={appMetadata.version} />
+              <InspectorItem label="Runtime" value={isPreview ? "Browser preview" : "Tauri desktop"} />
+              <InspectorItem label="Release" value="Alpha" />
+              <InspectorItem label="Rights" value={appMetadata.copyright} />
+            </dl>
+          </InspectorSection>
+
           <InspectorSection eyebrow="Vault access" title={isPreview ? "Preview only" : "Connect local vault"}>
             <div className="form-grid">
               <Field label="Vault path">

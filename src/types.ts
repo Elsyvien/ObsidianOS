@@ -3,6 +3,14 @@ export type VaultConfig = {
   connectedAt: string;
 };
 
+export type AppMetadata = {
+  productName: string;
+  version: string;
+  versionDisplay: string;
+  codename: string;
+  copyright: string;
+};
+
 export type AiSettings = {
   baseUrl: string;
   model: string;

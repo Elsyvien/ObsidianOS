@@ -19,6 +19,7 @@ import {
   generateFormulaBrief,
   generateNoteAiInsight,
   generateRevisionNote,
+  getAppMetadata,
   getRuntimeMode,
   getDashboard,
   getStatistics,
@@ -57,6 +58,7 @@ import {
 import type {
   ApplyExamReviewActionsRequest,
   ActivityLogEntry,
+  AppMetadata,
   AiSettingsInput,
   ChatScope,
   ChatThreadDetails,
@@ -79,12 +81,14 @@ import type {
   StatisticsScope,
   WorkspaceSnapshot,
 } from "./types";
+import { DEFAULT_APP_METADATA } from "./appMetadata";
 
 type EditableCourseField = "name" | "folder" | "examDate" | "revisionFolder" | "flashcardsFolder";
 
 function App() {
   const runtimeMode = getRuntimeMode();
   const isPreview = runtimeMode === "browser-preview";
+  const [appMetadata, setAppMetadata] = useState<AppMetadata>(DEFAULT_APP_METADATA);
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot>(EMPTY_WORKSPACE);
   const [activeView, setActiveView] = useState<AppView>("overview");
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
@@ -144,6 +148,26 @@ function App() {
 
   useEffect(() => {
     void refreshWorkspace();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void getAppMetadata()
+      .then((metadata) => {
+        if (!cancelled) {
+          setAppMetadata(metadata);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAppMetadata(DEFAULT_APP_METADATA);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -1446,6 +1470,7 @@ function App() {
           {showInspector ? (
             <InspectorPane
               activeView={activeView}
+              appMetadata={appMetadata}
               aiDraft={aiDraft}
               busyAction={busyAction}
               courseDraft={courseDraft}

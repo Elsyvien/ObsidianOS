@@ -1,6 +1,6 @@
 [package]
 name = "obsidian-exam-os"
-version = "0.1.0"
+version = "0.0.1-alpha"
 description = "ObsidianOS"
 authors = ["maxwi"]
 edition = "2021"

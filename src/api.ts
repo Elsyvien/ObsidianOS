@@ -1,5 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { DEFAULT_APP_METADATA, resolveAppMetadata } from "./appMetadata";
 import type {
+  AppMetadata,
   ApplyExamReviewActionsRequest,
   AiCourseSummary,
   AiNoteInsight,
@@ -74,6 +76,14 @@ const isTauriRuntime = () => isTauri();
 
 export const getRuntimeMode = () => (isTauriRuntime() ? "tauri" : "browser-preview");
 export const runtimeMode = getRuntimeMode();
+
+export function getAppMetadata(): Promise<AppMetadata> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(DEFAULT_APP_METADATA);
+  }
+
+  return resolveAppMetadata();
+}
 
 export function loadWorkspace() {
   if (!isTauriRuntime()) return loadWorkspaceMock();

@@ -1,10 +1,16 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import packageJson from "./package.json";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 const pagesBase = "/ObsidianOS/";
+const appVersion = packageJson.version;
+const appVersionDisplay = `V.${appVersion.replace(/(^|[-.])([a-z])/g, (_, prefix, letter) => `${prefix}${letter.toUpperCase()}`)}`;
+const appCodename = "Bixbite";
+const appProductName = "ObsidianOS";
+const appCopyright = "Copyright (c) Max Staneker";
 
 // https://vite.dev/config/
 export default defineConfig(async ({ mode }) => ({
@@ -14,6 +20,13 @@ export default defineConfig(async ({ mode }) => ({
     emptyOutDir: true,
   },
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+    __APP_VERSION_DISPLAY__: JSON.stringify(appVersionDisplay),
+    __APP_CODENAME__: JSON.stringify(appCodename),
+    __APP_PRODUCT_NAME__: JSON.stringify(appProductName),
+    __APP_COPYRIGHT__: JSON.stringify(appCopyright),
+  },
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
