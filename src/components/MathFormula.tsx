@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import mathJaxScriptUrl from "mathjax-full/es5/tex-chtml-full.js?url";
+import mathJaxScriptUrl from "mathjax-full/es5/tex-svg-full.js?url";
 
 type MathFormulaProps = {
   className?: string;
   display?: boolean;
-  inline?: boolean;
   latex: string;
   showSource?: boolean;
   sourceClassName?: string;
@@ -32,57 +31,6 @@ function joinClasses(...values: Array<string | undefined>) {
   return values.filter(Boolean).join(" ");
 }
 
-function unwrapMathDelimiters(value: string) {
-  const trimmed = value.trim();
-  const wrapped =
-    (trimmed.startsWith("$$") && trimmed.endsWith("$$") && trimmed.length > 4)
-      ? trimmed.slice(2, -2)
-      : (trimmed.startsWith("\\\\[") && trimmed.endsWith("\\\\]") && trimmed.length > 6)
-        ? trimmed.slice(3, -3)
-        : (trimmed.startsWith("\\[") && trimmed.endsWith("\\]") && trimmed.length > 4)
-          ? trimmed.slice(2, -2)
-          : (trimmed.startsWith("\\\\(") && trimmed.endsWith("\\\\)") && trimmed.length > 6)
-            ? trimmed.slice(3, -3)
-            : (trimmed.startsWith("\\(") && trimmed.endsWith("\\)") && trimmed.length > 4)
-              ? trimmed.slice(2, -2)
-              : null;
-
-  return wrapped === null ? trimmed : wrapped.trim();
-}
-
-function shouldUnescapeLatex(value: string) {
-  const escapedDelimiterCount = (value.match(/\\\\[\[\]()]/g) ?? []).length;
-  const escapedCommandCount = (value.match(/\\\\[A-Za-z]/g) ?? []).length;
-
-  return escapedDelimiterCount > 0 || escapedCommandCount >= 2;
-}
-
-function normalizeEscapedLatex(value: string) {
-  if (!shouldUnescapeLatex(value)) {
-    return value;
-  }
-
-  return value.replace(/\\\\/g, "\\");
-}
-
-export function normalizeLatexSource(value: string) {
-  const unwrapped = unwrapMathDelimiters(value.replace(/\r\n?/g, "\n"));
-
-  return normalizeEscapedLatex(unwrapped)
-    .replace(/\\\s+([\[\]\(\)])/g, "\\$1")
-    .trim();
-}
-
-export function looksLikeLatex(value: string) {
-  const normalized = normalizeEscapedLatex(value.trim());
-
-  if (!normalized) {
-    return false;
-  }
-
-  return /\\[A-Za-z]+|[_^{}]|\$|\\[\[\(]/.test(normalized);
-}
-
 export function ensureMathJax() {
   if (window.MathJax?.typesetPromise) {
     return Promise.resolve();
@@ -98,8 +46,8 @@ export function ensureMathJax() {
       ...(window.MathJax?.startup ?? {}),
       typeset: false,
     },
-    chtml: {
-      matchFontHeight: false,
+    svg: {
+      fontCache: "none",
     },
     tex: {
       packages: {
@@ -151,7 +99,6 @@ export function ensureMathJax() {
 export function MathFormula({
   className,
   display = true,
-  inline = false,
   latex,
   showSource = true,
   sourceClassName,
@@ -159,8 +106,6 @@ export function MathFormula({
   const renderedRef = useRef<HTMLSpanElement | null>(null);
   const [isTypeset, setIsTypeset] = useState(false);
   const sourceClasses = sourceClassName ?? "math-formula__source";
-  const normalizedLatex = normalizeLatexSource(latex);
-  const ContainerTag = inline ? "span" : "div";
 
   useEffect(() => {
     let active = true;
@@ -179,7 +124,7 @@ export function MathFormula({
         }
 
         const element = renderedRef.current;
-        element.textContent = display ? `\\[${normalizedLatex}\\]` : `\\(${normalizedLatex}\\)`;
+        element.textContent = display ? `\\[${latex}\\]` : `\\(${latex}\\)`;
         window.MathJax?.typesetClear?.([element]);
         window.MathJax?.texReset?.();
         await window.MathJax?.typesetPromise?.([element]);
@@ -189,7 +134,7 @@ export function MathFormula({
         }
       })
       .catch((error) => {
-        console.error("Failed to render LaTeX formula", { error, latex: normalizedLatex });
+        console.error("Failed to render LaTeX formula", { error, latex });
       });
 
     return () => {
@@ -198,17 +143,17 @@ export function MathFormula({
         window.MathJax?.typesetClear?.([renderedRef.current]);
       }
     };
-  }, [display, normalizedLatex]);
+  }, [display, latex]);
 
   return (
-    <ContainerTag className={joinClasses("math-formula", inline ? "math-formula--inline" : undefined, className)}>
+    <div className={joinClasses("math-formula", className)}>
       <span
-        aria-label={normalizedLatex}
+        aria-label={latex}
         className="math-formula__rendered"
         data-typeset={isTypeset ? "true" : "false"}
         ref={renderedRef}
       />
-      {showSource || !isTypeset ? <code className={sourceClasses}>{normalizedLatex}</code> : null}
-    </ContainerTag>
+      {showSource || !isTypeset ? <code className={sourceClasses}>{latex}</code> : null}
+    </div>
   );
 }
